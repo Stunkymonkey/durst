@@ -6,44 +6,46 @@ use iced_layershell::reexport::{Anchor, KeyboardInteractivity};
 use iced_layershell::settings::{LayerShellSettings, Settings};
 use iced_style::application;
 
-pub fn main() -> Result<(), iced_layershell::Error> {
-    Notification::run(Settings {
-        layer_settings: LayerShellSettings {
-            size: Some((500, 300)),
-            margin: (50, 50, 50, 50),
-            anchor: Anchor::Right | Anchor::Top, // Anchor::Bottom | Anchor::Left |
-            keyboard_interactivity: KeyboardInteractivity::None,
-            ..Default::default()
-        },
-        antialiasing: true,
-        ..Default::default()
-    })
-}
-
 #[derive(Debug, Default)]
-struct Notification {
+pub struct UINotification {
     value: i32,
     text: String,
     icon: String,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Message {
+#[derive(Debug, Clone)]
+pub enum Message {
     IncrementPressed,
     DecrementPressed,
 }
 
-impl Application for Notification {
+#[derive(Debug, Clone)]
+pub struct Flags {
+    pub app_name: String,
+    pub app_icon: String,
+}
+
+impl Default for Flags {
+    fn default() -> Self {
+        Flags {
+            app_name: "no text supplied".to_string(),
+            app_icon: "no icon supplied".to_string(),
+        }
+    }
+}
+
+impl Application for UINotification {
     type Message = Message;
-    type Flags = ();
+    type Flags = Flags;
     type Theme = Theme;
     type Executor = iced::executor::Default;
 
-    fn new(_flags: ()) -> (Self, Command<Message>) {
+    fn new(flags: Flags) -> (Self, Command<Message>) {
         (
             Self {
                 value: 0,
-                text: "notification".to_string(),
+                text: flags.app_name,
+                icon: flags.app_icon,
                 ..Default::default()
             },
             Command::none(),

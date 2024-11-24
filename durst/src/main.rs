@@ -6,6 +6,7 @@ mod config;
 mod dbus_interface;
 mod notification;
 mod test;
+mod gui;
 
 use dbus::arg;
 use dbus::blocking::stdintf::org_freedesktop_dbus::RequestNameReply;
@@ -17,6 +18,13 @@ use std::env::var;
 use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Duration;
+
+use crate::gui::Message;
+use crate::gui::Flags;
+use crate::gui::UINotification;
+use iced_layershell::Application;
+use iced_layershell::reexport::{Anchor, KeyboardInteractivity};
+use iced_layershell::settings::{LayerShellSettings, Settings};
 
 use config::Config;
 use notification::Notification;
@@ -58,6 +66,26 @@ impl dbus_interface::OrgFreedesktopNotifications for Mutex<Container> {
         debug!("notify {:?}", new_notification);
         let mut data = self.lock().unwrap();
         (*data).queue.push(new_notification);
+
+        // display the notification
+        let flags = Flags {
+            app_name: app_name.to_string(),
+            app_icon: app_icon.to_string(),
+        };
+        let _ = UINotification::run(Settings {
+            layer_settings: LayerShellSettings {
+                size: Some((500, 300)),
+                margin: (50, 50, 50, 50),
+                anchor: Anchor::Right | Anchor::Top,
+                keyboard_interactivity: KeyboardInteractivity::None,
+                // start_mode: iced_layershell::settings::StartMode::Background,
+                ..Default::default()
+            },
+            flags,
+            antialiasing: true,
+            ..Default::default()
+        });
+
         Ok((*data).queue.len() as u32)
     }
     fn close_notification(&self, id: u32) -> Result<(), Err> {
