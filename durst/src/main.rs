@@ -7,6 +7,7 @@ mod dbus_interface;
 mod notification;
 mod test;
 mod gui;
+mod icons;
 
 use dbus::arg;
 use dbus::blocking::stdintf::org_freedesktop_dbus::RequestNameReply;
@@ -26,11 +27,11 @@ use iced_layershell::reexport::{Anchor, KeyboardInteractivity};
 use iced_layershell::settings::{LayerShellSettings, Settings};
 
 use config::Config;
-use notification::Notification;
+use notification::RawNotification;
 
 #[derive(Debug)]
 struct Container {
-    queue: Vec<Notification>,
+    queue: Vec<RawNotification>,
     config: Vec<Config>,
 }
 
@@ -52,7 +53,7 @@ impl dbus_interface::OrgFreedesktopNotifications for Mutex<Container> {
         hints: ::std::collections::HashMap<String, arg::Variant<Box<dyn arg::RefArg>>>,
         expire_timeout: i32,
     ) -> Result<u32, Err> {
-        let new_notification = Notification::new(
+        let new_notification = RawNotification::new(
             app_name,
             replaces_id,
             app_icon,
@@ -64,23 +65,23 @@ impl dbus_interface::OrgFreedesktopNotifications for Mutex<Container> {
         );
         debug!("notify {:?}", new_notification);
         let mut data = self.lock().unwrap();
-        (*data).queue.push(new_notification);
+        (*data).queue.push(new_notification.clone());
 
         // display the notification
         let flags = Flags {
-            app_name: app_name.to_string(),
-            app_icon: app_icon.to_string(),
+            notification: new_notification,
+            app_icon: icons::get_icon(app_icon),
         };
         let _ = UINotification::run(Settings {
             layer_settings: LayerShellSettings {
-                size: Some((500, 300)),
+                size: Some((400, 100)),
                 margin: (50, 50, 50, 50),
                 anchor: Anchor::Right | Anchor::Top,
                 keyboard_interactivity: KeyboardInteractivity::None,
                 ..Default::default()
             },
             flags,
-            antialiasing: true,
+            // antialiasing: true,
             ..Default::default()
         });
 
@@ -114,7 +115,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = config::load_config(format!("{}/durst/config.yml", config_home));
 
     let container_rc = Rc::new(Mutex::new(Container {
-        queue: Vec::<Notification>::new(),
+        queue: Vec::<RawNotification>::new(),
         config: tmp,
     }));
 

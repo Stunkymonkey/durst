@@ -1,9 +1,11 @@
 use dbus::arg;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use dbus::arg::{RefArg, Variant};
 
-#[derive(Debug)]
-pub struct Notification {
+#[derive(Debug, Clone)]
+pub struct RawNotification {
     pub id: u32,
     pub app_name: String,
     pub replaces_id: String,
@@ -11,13 +13,14 @@ pub struct Notification {
     pub summary: String,
     pub body: String,
     pub actions: Vec<String>,
-    pub hints: HashMap<String, arg::Variant<Box<dyn arg::RefArg>>>,
+    // pub hints: HashMap<String, arg::Variant<Box<dyn arg::RefArg>>>,
+    pub hints: HashMap<String, arg::Variant<Arc<dyn arg::RefArg>>>,
     pub expire_timeout: String,
 }
 
 static ID_COUNTER: AtomicU32 = AtomicU32::new(1);
 
-impl Notification {
+impl RawNotification {
     pub fn new(
         app_name: &str,
         replaces_id: u32,
@@ -37,12 +40,17 @@ impl Notification {
         }
 
         let actions_vec: Vec<String> = actions.iter().map(|s| s.to_string()).collect();
-        let hints_map: HashMap<String, arg::Variant<Box<dyn arg::RefArg>>> =
-            hints.into_iter()
-                .map(|(s, hint)| (s.to_string(), hint))
-                .collect();
 
-        Notification {
+        let new_hints = hints
+            .into_iter()
+            .map(|(key, value)| {
+                // Access the inner `Box<dyn RefArg>` using `Variant.0` and wrap it in `Arc`
+                let arc_value = Variant(Arc::from(value.0));
+                (key, arc_value)
+            })
+            .collect();
+
+        RawNotification {
             id: id,
             app_name: app_name.to_string(),
             replaces_id: replaces_id.to_string(),
@@ -50,8 +58,21 @@ impl Notification {
             summary: summary.to_string(),
             body: body.to_string(),
             actions: actions_vec,
-            hints: hints_map,
+            hints: new_hints,
             expire_timeout: expire_timeout.to_string(),
         }
+    }
+
+    pub fn default() -> Self {
+        RawNotification::new(
+            "DefaultAppName",
+            0,
+            "DefaultAppIcon",
+            "DefaultSummary",
+            "DefaultBody",
+            vec![],
+            HashMap::new(),
+            5000,
+        )
     }
 }
