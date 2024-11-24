@@ -3,7 +3,7 @@ extern crate clap;
 
 mod cli;
 mod config;
-mod interface;
+mod dbus_interface;
 mod notification;
 mod test;
 
@@ -29,7 +29,7 @@ struct Container {
 
 type Err = tree::MethodErr;
 
-impl interface::OrgFreedesktopNotifications for Mutex<Container> {
+impl dbus_interface::OrgFreedesktopNotifications for Mutex<Container> {
     fn get_capabilities(&self) -> Result<Vec<String>, Err> {
         debug!("get_capabilities");
         Ok(vec!["test".to_string()])
@@ -75,8 +75,8 @@ impl interface::OrgFreedesktopNotifications for Mutex<Container> {
     }
 }
 
-impl AsRef<dyn interface::OrgFreedesktopNotifications + 'static> for Rc<Mutex<Container>> {
-    fn as_ref(&self) -> &(dyn interface::OrgFreedesktopNotifications + 'static) {
+impl AsRef<dyn dbus_interface::OrgFreedesktopNotifications + 'static> for Rc<Mutex<Container>> {
+    fn as_ref(&self) -> &(dyn dbus_interface::OrgFreedesktopNotifications + 'static) {
         &**self
     }
 }
@@ -93,7 +93,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }));
 
     let factory = tree::Factory::new_fn::<()>();
-    let iface = interface::org_freedesktop_notifications_server(&factory, (), move |_| {
+    let iface = dbus_interface::org_freedesktop_notifications_server(&factory, (), move |_| {
         Rc::clone(&container_rc)
     });
 
