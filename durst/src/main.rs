@@ -18,13 +18,13 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use config::Rule;
+use config::Config;
 use notification::Notification;
 
 #[derive(Debug)]
 struct Container {
     queue: Vec<Notification>,
-    config: Vec<Rule>,
+    config: Vec<Config>,
 }
 
 type Err = tree::MethodErr;

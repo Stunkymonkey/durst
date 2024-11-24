@@ -7,15 +7,27 @@ use std::io::BufReader;
 use std::io::Read;
 
 #[derive(Deserialize, Debug)]
-pub struct Rule {
-    pub test: String,
-    pub maybe: Option<String>,
+pub struct Matches {
+    pub app_name: Vec<String>,
 }
 
-pub fn load_config(path: String) -> Vec<Rule> {
+#[derive(Deserialize, Debug)]
+pub struct Rule {
+    pub name: String,
+    pub when_match: Vec<Matches>,
+    pub action: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Config {
+    pub rules: Vec<Rule>,
+    pub history_lenght: Option<usize>,
+}
+
+pub fn load_config(path: String) -> Vec<Config> {
     match read_file(path) {
         Ok(config_str) => {
-            let config: Rule = serde_yaml::from_str(&config_str).unwrap();
+            let config: Config = serde_yaml::from_str(&config_str).unwrap();
             debug!("{:?}", config);
             Vec::new()
         }
