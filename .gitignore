@@ -2,7 +2,7 @@
 .direnv/
 
 # generated code
-/durst/src/interface.rs
+/durst/src/dbus_interface.rs
 
 # generated completions
 /durst/scripts/completion/

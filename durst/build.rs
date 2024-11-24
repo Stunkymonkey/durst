@@ -18,7 +18,7 @@ fn dbus_interface() {
     let mut dbus_opts = GenOpts::default();
     dbus_opts.serveraccess = ServerAccess::AsRefClosure;
     let interface = dbus_codegen::generate(&xml, &dbus_opts).unwrap();
-    let mut out = File::create("src/interface.rs").unwrap();
+    let mut out = File::create("src/dbus_interface.rs").unwrap();
     out.write_all(&interface.into_bytes()).unwrap();
     println!("cargo:rerun-if-changed=interface.xml");
 }
