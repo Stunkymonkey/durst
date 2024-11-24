@@ -19,8 +19,8 @@ dbus-tree = "0.9"
 env_logger = "0.11"
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
-serde_yaml = "0.8"
-iced = { version = "0.12", features = [
+serde_yaml = "0.9"
+iced = { version = "0.13", features = [
 	"default",
 	"advanced",
 	"image",
@@ -28,9 +28,9 @@ iced = { version = "0.12", features = [
 	"multi-window",
 	"debug",
 ] }
-iced_runtime = "0.12"
-iced_layershell = "0.5.1"
-iced_style = "0.12"
+iced_core = "0.13"
+iced_runtime = "0.13"
+iced_layershell = "0.9"
 
 [build-dependencies]
 clap = "2.33"

@@ -1,10 +1,7 @@
-use iced::{Alignment, Border, Color, Command, Element, Length, Theme};
-use iced::application::StyleSheet;
+use iced::{Alignment, Background, Border, Color, Task, Element, Length, Theme};
 use iced::widget::{button, column, row, container, svg, text};
-use iced_layershell::Application;
-use iced_layershell::reexport::{Anchor, KeyboardInteractivity};
-use iced_layershell::settings::{LayerShellSettings, Settings};
-use iced_style::application;
+use iced_layershell::{Appearance, Application};
+use iced_layershell::to_layer_message;
 
 #[derive(Debug, Default)]
 pub struct UINotification {
@@ -13,6 +10,7 @@ pub struct UINotification {
     icon: String,
 }
 
+#[to_layer_message]
 #[derive(Debug, Clone)]
 pub enum Message {
     IncrementPressed,
@@ -40,7 +38,7 @@ impl Application for UINotification {
     type Theme = Theme;
     type Executor = iced::executor::Default;
 
-    fn new(flags: Flags) -> (Self, Command<Message>) {
+    fn new(flags: Flags) -> (Self, Task<Message>) {
         (
             Self {
                 value: 0,
@@ -48,7 +46,7 @@ impl Application for UINotification {
                 icon: flags.app_icon,
                 ..Default::default()
             },
-            Command::none(),
+            Task::none(),
         )
     }
 
@@ -56,25 +54,22 @@ impl Application for UINotification {
         String::from("durst")
     }
 
-    fn update(&mut self, message: Message) -> Command<Message> {
+    fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::IncrementPressed => {
                 self.value += 1;
-                Command::none()
+                Task::none()
             }
             Message::DecrementPressed => {
                 self.value -= 1;
-                Command::none()
+                Task::none()
             }
+            _ => unreachable!(),
         }
     }
 
     fn theme(&self) -> Self::Theme {
         iced::Theme::CatppuccinMocha
-    }
-
-    fn style(&self) -> <Self::Theme as StyleSheet>::Style {
-        <Self::Theme as iced::application::StyleSheet>::Style::Custom(Box::new(CustomTheme))
     }
 
     fn view(&self) -> Element<Message> {
@@ -84,16 +79,18 @@ impl Application for UINotification {
             button("Decrement").on_press(Message::DecrementPressed)
         ]
         .padding(20)
-        .align_items(Alignment::Center);
+        .align_x(Alignment::Center);
 
         let handle = svg::Handle::from_path(format!(
             "{}/resources/test.svg",
             env!("CARGO_MANIFEST_DIR")
         ));
 
-        // in iced 0.13: https://docs.iced.rs/iced/widget/struct.Svg.html
-        // svg.opacity(0.7)
-        let svg = svg(handle).width(Length::Fill).height(Length::Fill).content_fit(iced::ContentFit::Cover);
+        let svg = svg(handle)
+            .width(iced::Length::Fixed(50.0))
+            .height(iced::Length::Fixed(50.0))
+            // .content_fit(iced::ContentFit::Cover)
+            .opacity(0.7);
 
         container(
             column![
@@ -104,13 +101,12 @@ impl Application for UINotification {
                 ]
                 .height(Length::Fill)
                 .spacing(10)
-                .align_items(Alignment::Center)
+                .align_y(Alignment::Center)
                 .padding(10),
-            ].padding(10),
+            ]
+            .padding(10),
         )
-        .style(<iced_style::Theme as container::StyleSheet>::Style::Custom(
-            Box::new(CustomTheme),
-        ))
+        .style(move |_| iced_container_style())
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
@@ -118,32 +114,21 @@ impl Application for UINotification {
 }
 
 // themeing
-
-pub struct CustomTheme;
-
-impl container::StyleSheet for CustomTheme {
-    type Style = iced::Theme;
-
-    fn appearance(&self, _style: &Self::Style) -> container::Appearance {
-        container::Appearance {
-            border: Border {
-                color: Color::from_rgba(0.5, 0.5, 1.0, 0.4),
-                width: 40.0,
-                radius: 30.0.into(),
-            },
-            background: Some(Color::from_rgba(0.0, 1.0, 0.0, 0.6).into()),
-            ..container::Appearance::default()
-        }
-    }
-}
-
-impl iced_style::application::StyleSheet for CustomTheme {
-    type Style = iced::Theme;
-
-    fn appearance(&self, _style: &Self::Style) -> application::Appearance {
-        iced_style::application::Appearance {
-            background_color: Color::from_rgba(0.0, 0.0, 0.0, 0.0),
-            text_color: Color::from_rgba(1.0, 0.5, 0.5, 0.9),
-        }
+fn iced_container_style() -> iced::widget::container::Style {
+    // let config = crate::data::shared_data::CONFIG.lock().unwrap();
+    iced::widget::container::Style {
+        text_color: Some(Color::from_rgba(1.0, 0.5, 0.5, 0.9)),
+        border: iced::Border {
+            color: Color::from_rgba(0.5, 0.5, 1.0, 0.4),
+            width: 20.0,
+            radius: 30.0.into(),
+        },
+        shadow: iced::Shadow {
+            //has to be here as empty shadow is not allowed and no paddings yet to make it visible
+            color: Color::TRANSPARENT,
+            offset: iced::Vector { x: 0.0, y: 0.0 },
+            blur_radius: 0.0,
+        },
+        background: Some(iced::Background::Color(Color::from_rgba(0.0, 1.0, 0.0, 0.6))),
     }
 }

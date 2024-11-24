@@ -19,7 +19,6 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::gui::Message;
 use crate::gui::Flags;
 use crate::gui::UINotification;
 use iced_layershell::Application;
@@ -78,7 +77,6 @@ impl dbus_interface::OrgFreedesktopNotifications for Mutex<Container> {
                 margin: (50, 50, 50, 50),
                 anchor: Anchor::Right | Anchor::Top,
                 keyboard_interactivity: KeyboardInteractivity::None,
-                // start_mode: iced_layershell::settings::StartMode::Background,
                 ..Default::default()
             },
             flags,
