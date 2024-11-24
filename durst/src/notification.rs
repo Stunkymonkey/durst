@@ -25,7 +25,7 @@ impl Notification {
         summary: &str,
         body: &str,
         actions: Vec<&str>,
-        hints: HashMap<&str, arg::Variant<Box<dyn arg::RefArg>>>,
+        hints: HashMap<String, arg::Variant<Box<dyn arg::RefArg>>>,
         expire_timeout: i32,
     ) -> Self {
         let id;
@@ -35,19 +35,12 @@ impl Notification {
             // TODO: Ensure the replacement id is valid
             id = replaces_id;
         }
-        // TODO make code clean
-        // actions.map(String::from).collect()
-        // actions.map(|s| s.to_string()).collect()
-        let mut actions_vec: Vec<String> = Vec::with_capacity(actions.len());
-        for s in &actions {
-            actions_vec.push(s.to_string());
-        }
-        // TODO make code clean
-        let mut hints_map: HashMap<String, arg::Variant<Box<dyn arg::RefArg>>> =
-            HashMap::with_capacity(hints.len());
-        for (s, hint) in hints {
-            hints_map.insert(s.to_string(), hint);
-        }
+
+        let actions_vec: Vec<String> = actions.iter().map(|s| s.to_string()).collect();
+        let hints_map: HashMap<String, arg::Variant<Box<dyn arg::RefArg>>> =
+            hints.into_iter()
+                .map(|(s, hint)| (s.to_string(), hint))
+                .collect();
 
         Notification {
             id: id,

@@ -42,7 +42,7 @@ impl interface::OrgFreedesktopNotifications for Mutex<Container> {
         summary: &str,
         body: &str,
         actions: Vec<&str>,
-        hints: ::std::collections::HashMap<&str, arg::Variant<Box<dyn arg::RefArg>>>,
+        hints: ::std::collections::HashMap<String, arg::Variant<Box<dyn arg::RefArg>>>,
         expire_timeout: i32,
     ) -> Result<u32, Err> {
         let new_notification = Notification::new(
