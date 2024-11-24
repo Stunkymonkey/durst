@@ -13,15 +13,23 @@ pub struct Matches {
 
 #[derive(Deserialize, Debug)]
 pub struct Rule {
-    pub name: String,
+    pub name: Option<String>,
     pub when_match: Vec<Matches>,
     pub action: String,
 }
 
 #[derive(Deserialize, Debug)]
+pub struct Theme {
+    pub name: String,
+    pub color: String,
+}
+
+#[derive(Deserialize, Debug)]
 pub struct Config {
-    pub rules: Vec<Rule>,
+    pub rules: Option<Vec<Rule>>,
     pub history_lenght: Option<usize>,
+    pub default_theme: Option<String>,
+    pub themes: Option<Vec<Theme>>,
 }
 
 pub fn load_config(path: String) -> Vec<Config> {
