@@ -31,6 +31,7 @@ iced = { version = "0.13", features = [
 iced_core = "0.13"
 iced_runtime = "0.13"
 iced_layershell = "0.9"
+linicon = "2.3"
 
 [build-dependencies]
 clap = "2.33"
