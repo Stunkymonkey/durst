@@ -25,7 +25,7 @@
             dbus
             rustfmt
             clippy
-            #rustc pkg-config glib
+            cargo-outdated
           ];
           buildInputs = [
             libxkbcommon
