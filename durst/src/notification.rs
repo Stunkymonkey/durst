@@ -35,7 +35,6 @@ impl RawNotification {
         if replaces_id == 0 {
             id = ID_COUNTER.fetch_add(1, Ordering::Relaxed)
         } else {
-            // TODO: Ensure the replacement id is valid
             id = replaces_id;
         }
 
