@@ -1,6 +1,6 @@
-use iced::{Alignment, Color, Task, Element, Length, Theme};
-use iced::widget::{column, row, container, svg, text};
-use iced_layershell::{MultiApplication, to_layer_message};
+use iced::widget::{column, container, row, svg, text};
+use iced::{Alignment, Color, Element, Length, Task, Theme};
+use iced_layershell::{to_layer_message, MultiApplication};
 use std::path::PathBuf;
 
 use crate::notification::RawNotification;
@@ -96,7 +96,6 @@ impl MultiApplication for UINotification {
     }
 
     fn view(&self, _id: iced::window::Id) -> Element<Message> {
-
         let handle = svg::Handle::from_path(self.icon.clone());
 
         let svg = svg(handle)
@@ -106,18 +105,16 @@ impl MultiApplication for UINotification {
             .opacity(0.7);
 
         container(
-            column![
-                row![
-                    svg,
-                    text(self.app_name.clone()).size(20),
-                    text(self.body.clone()).size(20),
-                    text(self.summary.clone()).size(20),
-                ]
-                .height(Length::Fill)
-                .spacing(10)
-                .align_y(Alignment::Center)
-                .padding(10),
+            column![row![
+                svg,
+                text(self.app_name.clone()).size(20),
+                text(self.body.clone()).size(20),
+                text(self.summary.clone()).size(20),
             ]
+            .height(Length::Fill)
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .padding(10),]
             .padding(10),
         )
         .style(move |_| iced_container_style())
@@ -143,6 +140,8 @@ fn iced_container_style() -> iced::widget::container::Style {
             offset: iced::Vector { x: 0.0, y: 0.0 },
             blur_radius: 25.0,
         },
-        background: Some(iced::Background::Color(Color::from_rgba(0.2, 0.2, 1.0, 0.6))),
+        background: Some(iced::Background::Color(Color::from_rgba(
+            0.2, 0.2, 1.0, 0.6,
+        ))),
     }
 }

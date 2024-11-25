@@ -1,8 +1,8 @@
 use dbus::arg;
+use dbus::arg::{RefArg, Variant};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use dbus::arg::{RefArg, Variant};
 
 #[derive(Debug, Clone)]
 pub struct RawNotification {

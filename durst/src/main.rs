@@ -1,10 +1,10 @@
 mod cli;
 mod config;
 mod dbus_interface;
-mod notification;
-mod test;
 mod gui;
 mod icons;
+mod notification;
+mod test;
 
 use dbus::arg;
 use dbus::blocking::stdintf::org_freedesktop_dbus::RequestNameReply;
@@ -19,9 +19,9 @@ use std::time::Duration;
 
 use crate::gui::Flags;
 use crate::gui::UINotification;
-use iced_layershell::MultiApplication;
 use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
 use iced_layershell::settings::{LayerShellSettings, Settings};
+use iced_layershell::MultiApplication;
 
 use config::Config;
 use notification::RawNotification;

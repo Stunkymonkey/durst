@@ -1,5 +1,5 @@
-use clap::{Arg, Command};
 use clap::builder::PossibleValuesParser;
+use clap::{Arg, Command};
 
 pub fn build_cli() -> Command {
     Command::new(env!("CARGO_PKG_NAME"))
@@ -18,7 +18,7 @@ pub fn build_cli() -> Command {
                 .help("Use alternative config file")
                 .long("config")
                 .short('c'),
-                // .takes_value(true),
+            // .takes_value(true),
         )
         .arg(
             Arg::new("mode")
@@ -26,6 +26,6 @@ pub fn build_cli() -> Command {
                 .long("force-output")
                 .short('o')
                 .value_name("MODE")
-                .value_parser(PossibleValuesParser::new(["wayland", "xorg", "stdout"]))
+                .value_parser(PossibleValuesParser::new(["wayland", "xorg", "stdout"])),
         )
 }
