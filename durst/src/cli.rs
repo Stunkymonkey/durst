@@ -1,30 +1,31 @@
-use clap::{App, Arg};
+use clap::{Arg, Command};
+use clap::builder::PossibleValuesParser;
 
-pub fn build_cli() -> App<'static, 'static> {
-    App::new(crate_name!())
-        .about(crate_description!())
-        .author(crate_authors!())
-        .version(crate_version!())
+pub fn build_cli() -> Command {
+    Command::new(env!("CARGO_PKG_NAME"))
+        .about(env!("CARGO_PKG_DESCRIPTION"))
+        .author(env!("CARGO_PKG_AUTHORS"))
+        .version(env!("CARGO_PKG_VERSION"))
         .arg(
-            Arg::with_name("verbose")
+            Arg::new("verbose")
                 .help("turn on debugging information")
                 .long("verbose")
-                .short("v"),
+                .short('v'),
         )
         .arg(
-            Arg::with_name("config-path")
+            Arg::new("config-path")
                 .value_name("FILE")
                 .help("Use alternative config file")
                 .long("config")
-                .short("c")
-                .takes_value(true),
+                .short('c'),
+                // .takes_value(true),
         )
         .arg(
-            Arg::with_name("mode")
+            Arg::new("mode")
                 .help("Overwrite the automatic output-mode")
                 .long("force-output")
-                .short("o")
-                .takes_value(true)
-                .possible_values(&["wayland", "xorg", "stdout"]),
+                .short('o')
+                .value_name("MODE")
+                .value_parser(PossibleValuesParser::new(["wayland", "xorg", "stdout"]))
         )
 }

@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate clap;
-
 mod cli;
 mod config;
 mod dbus_interface;
@@ -153,14 +150,12 @@ fn main() {
     env_logger::init();
 
     let matches = cli::build_cli().get_matches();
-    if let Some(mode) = matches.value_of("mode") {
-        match mode {
-            "wayland" => println!("You are using wayland"),
-            "xorg" => println!("You are using xorg"),
-            "stdout" => println!("You are using stdout"),
-            _ => unreachable!(),
-        }
+    if let Some(mode) = matches.get_one::<String>("mode") {
+        println!("Mode: {}", mode);
+    } else {
+        println!("No mode provided");
     }
+
     if let Err(e) = run() {
         println!("{}", e);
     }

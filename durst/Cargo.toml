@@ -13,7 +13,7 @@ include = [
 readme = "README.md"
 
 [dependencies]
-clap = "2.33"
+clap = "4.5"
 dbus = "0.9"
 dbus-tree = "0.9"
 env_logger = "0.11"
@@ -34,5 +34,6 @@ iced_layershell = "0.9"
 linicon = "2.3"
 
 [build-dependencies]
-clap = "2.33"
+clap = "4.5"
+clap_complete = "4.0"
 dbus-codegen = "0.9"

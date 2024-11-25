@@ -1,7 +1,4 @@
-#[macro_use]
-extern crate clap;
-
-use clap::Shell;
+use clap_complete::{generate_to, Shell};
 use dbus_codegen::{GenOpts, ServerAccess};
 use std::fs::{self, File};
 use std::io::Write;
@@ -25,11 +22,12 @@ fn dbus_interface() {
 
 fn cli() {
     let outdir = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/completion");
-    std::fs::create_dir_all(&outdir).unwrap();
+    fs::create_dir_all(&outdir).expect("Failed to create output directory");
 
     let mut app = build_cli();
-    app.gen_completions(crate_name!(), Shell::Bash, &outdir);
-    app.gen_completions(crate_name!(), Shell::Elvish, &outdir);
-    app.gen_completions(crate_name!(), Shell::Fish, &outdir);
-    app.gen_completions(crate_name!(), Shell::Zsh, &outdir);
+
+    for shell in [Shell::Fish, Shell::Zsh, Shell::Bash, Shell::Elvish] {
+        generate_to(shell, &mut app, env!("CARGO_PKG_NAME"), &outdir)
+            .expect("Failed to generate shell completions");
+    }
 }
