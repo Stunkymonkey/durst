@@ -1,6 +1,6 @@
 mod cli;
 mod config;
-mod dbus_interface;
+mod dbus_notifications;
 mod gui;
 mod icons;
 mod notification;
@@ -34,7 +34,7 @@ struct Container {
 
 type Err = tree::MethodErr;
 
-impl dbus_interface::OrgFreedesktopNotifications for Mutex<Container> {
+impl dbus_notifications::OrgFreedesktopNotifications for Mutex<Container> {
     fn get_capabilities(&self) -> Result<Vec<String>, Err> {
         debug!("get_capabilities");
         Ok(vec!["test".to_string()])
@@ -100,8 +100,8 @@ impl dbus_interface::OrgFreedesktopNotifications for Mutex<Container> {
     }
 }
 
-impl AsRef<dyn dbus_interface::OrgFreedesktopNotifications + 'static> for Rc<Mutex<Container>> {
-    fn as_ref(&self) -> &(dyn dbus_interface::OrgFreedesktopNotifications + 'static) {
+impl AsRef<dyn dbus_notifications::OrgFreedesktopNotifications + 'static> for Rc<Mutex<Container>> {
+    fn as_ref(&self) -> &(dyn dbus_notifications::OrgFreedesktopNotifications + 'static) {
         &**self
     }
 }
@@ -118,7 +118,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }));
 
     let factory = tree::Factory::new_fn::<()>();
-    let iface = dbus_interface::org_freedesktop_notifications_server(&factory, (), move |_| {
+    let iface = dbus_notifications::org_freedesktop_notifications_server(&factory, (), move |_| {
         Rc::clone(&container_rc)
     });
 
