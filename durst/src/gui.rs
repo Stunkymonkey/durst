@@ -1,7 +1,6 @@
-use iced::{Alignment, Background, Border, Color, Task, Element, Length, Theme};
-use iced::widget::{button, column, row, container, svg, text};
-use iced_layershell::{Appearance, Application};
-use iced_layershell::to_layer_message;
+use iced::{Alignment, Color, Task, Element, Length, Theme};
+use iced::widget::{column, row, container, svg, text};
+use iced_layershell::{MultiApplication, to_layer_message};
 use std::path::PathBuf;
 
 use crate::notification::RawNotification;
@@ -15,12 +14,15 @@ pub struct UINotification {
     icon: PathBuf,
 }
 
-#[to_layer_message]
+#[to_layer_message(multi, info_name = "Flags")]
 #[derive(Debug, Clone)]
 pub enum Message {
-    MoveNotification,
-    CloseNotification,
+    Move,
+    Close,
+    Notify(crate::notification::RawNotification),
 }
+
+// type WindowInfo = Flags;
 
 #[derive(Debug, Clone)]
 pub struct Flags {
@@ -37,11 +39,12 @@ impl Default for Flags {
     }
 }
 
-impl Application for UINotification {
+impl MultiApplication for UINotification {
     type Message = Message;
     type Flags = Flags;
     type Theme = Theme;
     type Executor = iced::executor::Default;
+    type WindowInfo = Flags;
 
     fn new(flags: Flags) -> (Self, Task<Message>) {
         (
@@ -63,12 +66,16 @@ impl Application for UINotification {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::MoveNotification => {
+            Message::Move => {
                 // TODO move
                 Task::none()
             }
-            Message::CloseNotification => {
+            Message::Close => {
                 // TODO close
+                Task::none()
+            }
+            Message::Notify(_notification) => {
+                // TODO notify
                 Task::none()
             }
             _ => unreachable!(),
@@ -88,7 +95,7 @@ impl Application for UINotification {
         }
     }
 
-    fn view(&self) -> Element<Message> {
+    fn view(&self, _id: iced::window::Id) -> Element<Message> {
 
         let handle = svg::Handle::from_path(self.icon.clone());
 

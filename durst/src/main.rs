@@ -22,8 +22,8 @@ use std::time::Duration;
 
 use crate::gui::Flags;
 use crate::gui::UINotification;
-use iced_layershell::Application;
-use iced_layershell::reexport::{Anchor, KeyboardInteractivity};
+use iced_layershell::MultiApplication;
+use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
 use iced_layershell::settings::{LayerShellSettings, Settings};
 
 use config::Config;
@@ -75,13 +75,14 @@ impl dbus_interface::OrgFreedesktopNotifications for Mutex<Container> {
         let _ = UINotification::run(Settings {
             layer_settings: LayerShellSettings {
                 size: Some((400, 100)),
+                exclusive_zone: 0,
                 margin: (50, 50, 50, 50),
                 anchor: Anchor::Right | Anchor::Top,
+                layer: Layer::Overlay,
                 keyboard_interactivity: KeyboardInteractivity::None,
                 ..Default::default()
             },
             flags,
-            // antialiasing: true,
             ..Default::default()
         });
 
