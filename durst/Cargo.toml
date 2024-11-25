@@ -36,4 +36,4 @@ linicon = "2.3"
 [build-dependencies]
 clap = "4.5"
 clap_complete = "4.0"
-dbus-codegen = "0.9"
+dbus-codegen = "0.12"
