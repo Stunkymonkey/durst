@@ -26,9 +26,11 @@ iced = { version = "=0.14.0", default-features = false, features = [
 	"tokio",
 	"wayland",
 ] }
+# same version as iced; raster icons are scaled by durst, see ui/icons.rs
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
 # linux-theme-detection blocks startup on a portal call; colors come from the config
 iced_layershell = { version = "=0.19.1", default-features = false }
-linicon = "2.3"
+freedesktop-icons = "0.4"
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1", features = ["sync", "time"] }
