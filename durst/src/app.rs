@@ -2,9 +2,12 @@
 //! changes of the [`Store`]. After every event, [`App::sync`] reconciles the
 //! open surfaces with the store.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use durst_proto::control::DaemonInfo;
 use durst_proto::notifications::CloseReason;
 use iced::widget::text;
 use iced::{Color, Element, Subscription, Task, mouse, window};
@@ -16,11 +19,14 @@ use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
 use iced_layershell::to_layer_message;
 use zbus::Connection;
 
-use crate::config::{Anchor, Config, MouseAction, Output};
+use crate::config::{self, Anchor, Config, MouseAction, Output};
+use crate::core::history::History;
 use crate::core::layout::Margin;
 use crate::core::notification::{Notification, Urgency};
 use crate::core::store::{Insert, Store};
-use crate::dbus::notifications::{self as dbus_notifications, emit_action_invoked, emit_closed};
+use crate::dbus::control::{self, Command, Reply, Status, emit_status_changed};
+use crate::dbus::notifications::{emit_action_invoked, emit_closed};
+use crate::dbus::{self, Event};
 use crate::ui::icons::Icon;
 use crate::ui::markup::{self, Run};
 use crate::ui::notification::{self as ui, Content};
@@ -32,8 +38,10 @@ const TICK: Duration = Duration::from_millis(100);
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 pub enum Message {
-    Dbus(dbus_notifications::Event),
+    Dbus(Event),
     Surface(window::Id, ui::Event),
+    /// the surface exists now; changes sent before this are lost
+    Opened(window::Id),
     Tick(Instant),
 }
 
@@ -44,8 +52,14 @@ enum Key {
     More,
 }
 
+/// A layer surface and the size and margin last sent for it.
+///
+/// iced_layershell silently drops changes for surfaces it hasn't created
+/// yet, so changes are only sent once the surface is `opened`; until then
+/// `sync` leaves `size`/`margin` at the values it was created with.
 struct Surface {
     window: window::Id,
+    opened: bool,
     size: (u32, u32),
     margin: Margin,
 }
@@ -56,18 +70,33 @@ struct Rendered {
     icon: Option<Icon>,
 }
 
+/// Where the config comes from, for reloading.
+#[derive(Debug, Clone)]
+pub struct ConfigSource {
+    pub path: PathBuf,
+    /// given with `-c`: a missing file is an error
+    pub explicit: bool,
+}
+
 pub struct App {
     config: Config,
+    source: ConfigSource,
     store: Store,
+    history: History,
     conn: Option<Connection>,
+    /// counts shared with the control interface, and the last published ones
+    status: Option<Arc<Mutex<Status>>>,
+    published: Status,
     rendered: HashMap<u32, Rendered>,
     surfaces: HashMap<Key, Surface>,
     windows: HashMap<window::Id, Key>,
+    /// surfaces closed before they were opened, removed once they are
+    orphans: HashSet<window::Id>,
 }
 
-pub fn run(config: Config) -> Result<(), iced_layershell::Error> {
+pub fn run(config: Config, source: ConfigSource) -> Result<(), iced_layershell::Error> {
     daemon(
-        move || App::new(config.clone()),
+        move || App::new(config.clone(), source.clone()),
         || NAMESPACE.to_string(),
         App::update,
         App::view,
@@ -89,24 +118,30 @@ pub fn run(config: Config) -> Result<(), iced_layershell::Error> {
 }
 
 impl App {
-    fn new(config: Config) -> Self {
+    fn new(config: Config, source: ConfigSource) -> Self {
         Self {
+            history: History::new(config.history.length),
             config,
+            source,
             store: Store::default(),
             conn: None,
+            status: None,
+            published: Status::default(),
             rendered: HashMap::new(),
             surfaces: HashMap::new(),
             windows: HashMap::new(),
+            orphans: HashSet::new(),
         }
     }
 
     fn subscription(&self) -> Subscription<Message> {
         let dbus = Subscription::run(dbus_stream).map(Message::Dbus);
-        if self.store.next_deadline().is_some() {
-            Subscription::batch([dbus, iced::time::every(TICK).map(Message::Tick)])
-        } else {
-            dbus
-        }
+        let opened = window::open_events().map(Message::Opened);
+        let tick = self
+            .store
+            .next_deadline()
+            .map(|_| iced::time::every(TICK).map(Message::Tick));
+        Subscription::batch([dbus, opened].into_iter().chain(tick))
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -115,12 +150,18 @@ impl App {
     }
 
     fn handle(&mut self, message: Message) -> Task<Message> {
-        use dbus_notifications::Event;
         match message {
-            Message::Dbus(Event::Connected(conn)) => {
+            Message::Dbus(Event::Connected(conn, status)) => {
                 log::info!("serving org.freedesktop.Notifications");
                 self.conn = Some(conn);
+                self.status = Some(status);
                 Task::none()
+            }
+            Message::Dbus(Event::Control(command, responder)) => {
+                log::debug!("control: {command:?}");
+                let (reply, task) = self.control(command);
+                responder.send(reply);
+                task
             }
             Message::Dbus(Event::Failed(e)) => {
                 log::error!("{e}");
@@ -132,6 +173,15 @@ impl App {
                 Some(&Key::Notification(id)) => self.surface_event(id, event),
                 _ => Task::none(),
             },
+            Message::Opened(window) => {
+                if self.orphans.remove(&window) {
+                    return Task::done(Message::RemoveWindow(window));
+                }
+                if let Some(surface) = self.surfaces.values_mut().find(|s| s.window == window) {
+                    surface.opened = true;
+                }
+                Task::none()
+            }
             Message::Tick(now) => {
                 self.store.update_timers(&self.config.general, now);
                 let expired = self.store.expired(now);
@@ -211,10 +261,14 @@ impl App {
     }
 
     fn close(&mut self, id: u32, reason: CloseReason) -> Task<Message> {
-        if self.store.remove(id).is_none() {
+        let Some(entry) = self.store.remove(id) else {
             return Task::none();
-        }
+        };
         log::debug!("close {id}: {reason:?}");
+        // the user may want these back; the sender closed the others itself
+        if matches!(reason, CloseReason::Expired | CloseReason::Dismissed) {
+            self.history.push(entry.notification);
+        }
         self.rendered.remove(&id);
         self.emit_closed(id, reason)
     }
@@ -344,7 +398,7 @@ impl App {
 
     /// Opens, moves, resizes and closes surfaces to match the store.
     fn sync(&mut self, now: Instant) -> Task<Message> {
-        let general = &self.config.general;
+        let general = &self.config.general.clone();
         self.store.update_timers(general, now);
 
         let mut wanted: Vec<(Key, u32)> = self
@@ -361,19 +415,21 @@ impl App {
 
         let mut tasks = Vec::new();
         let was_empty = self.surfaces.is_empty();
-        let windows = &mut self.windows;
-        self.surfaces.retain(|key, surface| {
-            let keep = wanted.iter().any(|(k, _)| k == key);
-            if !keep {
-                windows.remove(&surface.window);
-                tasks.push(Task::done(Message::RemoveWindow(surface.window)));
-            }
-            keep
-        });
+        let gone: Vec<Key> = self
+            .surfaces
+            .keys()
+            .filter(|key| !wanted.iter().any(|(k, _)| k == *key))
+            .copied()
+            .collect();
+        for key in gone {
+            tasks.push(self.remove_surface(key));
+        }
 
         for ((key, height), margin) in wanted.into_iter().zip(margins) {
             let size = (general.width, height);
             match self.surfaces.get_mut(&key) {
+                // changes wait until the surface exists
+                Some(surface) if !surface.opened => {}
                 Some(surface) => {
                     if surface.size != size {
                         surface.size = size;
@@ -410,6 +466,7 @@ impl App {
                         key,
                         Surface {
                             window,
+                            opened: false,
                             size,
                             margin,
                         },
@@ -423,7 +480,175 @@ impl App {
         if !was_empty && self.surfaces.is_empty() && general.output == Output::Focused {
             tasks.push(Task::done(Message::ForgetLastOutput));
         }
+        tasks.push(self.publish_status());
         Task::batch(tasks)
+    }
+
+    fn publish_status(&mut self) -> Task<Message> {
+        let general = &self.config.general;
+        let status = Status {
+            displayed: self.store.visible(general).len() as u32,
+            waiting: self.store.waiting(general) as u32,
+            history: self.history.len() as u32,
+        };
+        let (Some(shared), Some(conn)) = (&self.status, &self.conn) else {
+            return Task::none();
+        };
+        if status == self.published {
+            return Task::none();
+        }
+        *shared.lock().unwrap() = status;
+        let old = std::mem::replace(&mut self.published, status);
+        Task::future(emit_status_changed(conn.clone(), old, status)).discard()
+    }
+
+    /// Handles a durstctl command; the reply goes back over D-Bus.
+    fn control(&mut self, command: Command) -> (Reply, Task<Message>) {
+        let general = &self.config.general;
+        let resolve = |store: &Store, id: u32| match id {
+            0 => store
+                .newest_visible(general)
+                .ok_or_else(|| Reply::NotFound("no notification is displayed".into())),
+            id => store
+                .get(id)
+                .map(|e| e.notification.id)
+                .ok_or_else(|| Reply::NotFound(format!("no notification {id}"))),
+        };
+        match command {
+            Command::List => {
+                let visible = self.store.visible(general).len();
+                let list = self
+                    .store
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| {
+                        let state = if i < visible { "displayed" } else { "waiting" };
+                        control::info(&e.notification, state)
+                    })
+                    .collect();
+                (Reply::Notifications(list), Task::none())
+            }
+            Command::Close(id) => match resolve(&self.store, id) {
+                Ok(id) => (Reply::Done, self.close(id, CloseReason::Dismissed)),
+                Err(reply) => (reply, Task::none()),
+            },
+            Command::CloseAll => (Reply::Done, self.close_all()),
+            Command::Action(id, key) => {
+                let id = match resolve(&self.store, id) {
+                    Ok(id) => id,
+                    Err(reply) => return (reply, Task::none()),
+                };
+                let n = &self.store.get(id).expect("resolved").notification;
+                let key = match key.as_str() {
+                    "" => default_action(n),
+                    key => n
+                        .actions
+                        .iter()
+                        .any(|(k, _)| k == key)
+                        .then(|| key.to_owned()),
+                };
+                match key {
+                    Some(key) => {
+                        let invoke = self.invoke(id, &key);
+                        (
+                            Reply::Done,
+                            Task::batch([invoke, self.close_after_action(id)]),
+                        )
+                    }
+                    None => (
+                        Reply::NotFound(format!("notification {id} has no such action")),
+                        Task::none(),
+                    ),
+                }
+            }
+            Command::History => {
+                let list = self
+                    .history
+                    .iter()
+                    .map(|n| control::info(n, "history"))
+                    .collect();
+                (Reply::Notifications(list), Task::none())
+            }
+            Command::HistoryPop => match self.history.pop() {
+                Some(mut n) => {
+                    let id = n.id;
+                    if self.config.history.sticky {
+                        n.expire_timeout = 0;
+                    }
+                    (Reply::Id(id), self.notify(n))
+                }
+                None => (Reply::NotFound("the history is empty".into()), Task::none()),
+            },
+            Command::HistoryClear => {
+                self.history.clear();
+                (Reply::Done, Task::none())
+            }
+            Command::Reload => match config::load(&self.source.path, self.source.explicit) {
+                Ok(config) => (Reply::Done, self.apply_config(config)),
+                Err(e) => {
+                    log::warn!("keeping the old config: {e}");
+                    (Reply::InvalidConfig(e), Task::none())
+                }
+            },
+            Command::Info => {
+                let info = DaemonInfo {
+                    version: env!("CARGO_PKG_VERSION").to_owned(),
+                    config_path: self.source.path.display().to_string(),
+                    displayed: self.store.visible(general).len() as u32,
+                    waiting: self.store.waiting(general) as u32,
+                    history: self.history.len() as u32,
+                };
+                (Reply::Info(info), Task::none())
+            }
+        }
+    }
+
+    /// Switches to a new config: re-renders every notification (styles and
+    /// sizes may have changed) and reopens all surfaces, since anchor and
+    /// output can only be set when a surface is created.
+    fn apply_config(&mut self, config: Config) -> Task<Message> {
+        log::info!("config reloaded");
+        self.config = config;
+        self.history.set_capacity(self.config.history.length);
+        let ids: Vec<u32> = self.store.iter().map(|e| e.notification.id).collect();
+        for id in ids {
+            let entry = self.store.get(id).expect("listed");
+            let n = &entry.notification;
+            let style = self.config.style(n.hints.urgency);
+            let rendered = Rendered {
+                body: markup::parse(&n.body),
+                icon: crate::ui::icons::resolve(
+                    n,
+                    style.icon_size,
+                    self.config.general.icon_theme.as_deref(),
+                ),
+            };
+            let content = Content {
+                notification: n,
+                count: entry.count,
+                body: &rendered.body,
+                icon: rendered.icon.as_ref(),
+            };
+            let height = ui::height(&content, style, self.config.general.width);
+            self.store.set_height(id, height);
+            self.rendered.insert(id, rendered);
+        }
+        let keys: Vec<Key> = self.surfaces.keys().copied().collect();
+        Task::batch(keys.into_iter().map(|key| self.remove_surface(key)))
+    }
+
+    fn remove_surface(&mut self, key: Key) -> Task<Message> {
+        let Some(surface) = self.surfaces.remove(&key) else {
+            return Task::none();
+        };
+        self.windows.remove(&surface.window);
+        if surface.opened {
+            Task::done(Message::RemoveWindow(surface.window))
+        } else {
+            // removing it now would be dropped, and it would appear later
+            self.orphans.insert(surface.window);
+            Task::none()
+        }
     }
 }
 
@@ -438,18 +663,16 @@ fn default_action(n: &Notification) -> Option<String> {
     }
 }
 
-fn dbus_stream() -> impl futures::Stream<Item = dbus_notifications::Event> {
+fn dbus_stream() -> impl futures::Stream<Item = Event> {
     use futures::SinkExt;
     iced::stream::channel(32, async |mut events| {
-        match dbus_notifications::serve(events.clone()).await {
-            Ok(conn) => {
-                let _ = events
-                    .send(dbus_notifications::Event::Connected(conn))
-                    .await;
+        match dbus::serve(events.clone()).await {
+            Ok((conn, status)) => {
+                let _ = events.send(Event::Connected(conn, status)).await;
                 std::future::pending::<()>().await;
             }
             Err(e) => {
-                let _ = events.send(dbus_notifications::Event::Failed(e)).await;
+                let _ = events.send(Event::Failed(e)).await;
             }
         }
     })

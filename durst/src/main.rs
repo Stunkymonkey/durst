@@ -33,7 +33,7 @@ fn main() {
     };
     log::debug!("{config:?}");
 
-    if let Err(e) = app::run(config) {
+    if let Err(e) = app::run(config, app::ConfigSource { path, explicit }) {
         log::error!("{e}");
         std::process::exit(1);
     }

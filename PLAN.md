@@ -231,11 +231,13 @@ actions (later rules override earlier ones), as in dunst.
 
 ### 4.6 History
 
-- Ring buffer of `history_length` entries (default 20).
-- Closed notifications go into history unless they are `history_ignore` or
-  `transient`.
-- `durstctl history pop` re-shows the most recent one; `history list` prints
-  JSON; `history clear` empties it.
+- Ring buffer of `[history] length` entries (default 20).
+- Expired and dismissed notifications go into history unless they are
+  `transient` (or `history_ignore`, M3). Notifications closed by their sender
+  (`CloseNotification`) or replaced by a duplicate/stack tag don't.
+- `durstctl history pop` re-shows the most recent one with its old id; with
+  `[history] sticky = true` (default) it doesn't expire again. `history list`
+  prints a table or JSON; `history clear` empties it.
 
 ### 4.7 Environment awareness
 
@@ -275,7 +277,7 @@ actions (later rules override earlier ones), as in dunst.
 ### 4.10 CLI – `durstctl`
 
 ```
-durstctl notif   list [--json] | count | close [ID] | close-all
+durstctl notif   list [--json] | count [--waiting] | close [ID] | close-all
                  action [ID] [KEY]          # default: newest, "default" key
 durstctl history list [--json] | pop | clear | count
 durstctl mode    list | set <M>... | enable <M> | disable <M> | toggle <M>
@@ -283,10 +285,11 @@ durstctl volume  get [--mic] | set <N|+N%|-N%> [--mic] | mute <on|off|toggle> [-
 durstctl media   status [--json] | play | pause | toggle | next | prev
 durstctl osd     show <volume|mic|media>
 durstctl reload
-durstctl info                               # version, config path, active modes, counts
+durstctl info [--json]                      # version, config path, active modes, counts
 ```
 
-- Exit codes: 0 = ok, 1 = daemon not running, 2 = bad argument, 3 = nothing to act on.
+- Exit codes: 0 = ok, 1 = daemon not running, 2 = bad argument, 3 = nothing to
+  act on, 4 = invalid config (reload).
 - Shell completions and a man page are generated in `build.rs` (`clap_complete`, `clap_mangen`).
 
 ### 4.11 Control D-Bus interface
@@ -412,7 +415,14 @@ scenarios cover the features. The "+N more" indicator is its own surface.
 - **Done when:** it replaces dunst on the maintainer's machine for a week
   without regressions.
 
-### M2 – CLI & control interface
+### M2 – CLI & control interface ✅ done 2026-10-02
+
+Outcome: as planned. Control commands travel through the UI loop and are
+answered over a oneshot channel; the counts are a shared snapshot published
+with `PropertiesChanged`. Reload re-renders everything and reopens all
+surfaces (anchor and output can only be set at creation). Found and fixed
+R8 on the way. Man pages and completions for both binaries are generated
+into `*/scripts/` (git-ignored).
 - The Durst1 interface (4.11) and the `notif`, `history`, `reload` and `info`
   commands in durstctl.
 - History ring (4.6).
@@ -481,6 +491,7 @@ scenarios cover the features. The "+N more" indicator is its own surface.
 | R4 | `focused` output depends on the compositor, which places output-less layer surfaces where it likes. | Document it. `name:` is always available for deterministic placement. |
 | R5 | PipeWire API complexity (default node tracking, channel volumes). | Isolate it behind `audio::Backend` with a trait so a `wpctl` fallback stays possible. |
 | R6 | The interactive slider floods PipeWire with updates. | Debounce, and only send the last value. |
+| R8 | iced_layershell silently drops changes (margin, size, removal) for surfaces it hasn't created yet. Quick bursts of notifications reorder the stack before the new surfaces exist: a surface stays at its old place, hidden under another (`urgency` failed 2 of 15 runs). | Surfaces count as `opened` only after the window `Opened` event; until then `sync` sends no changes (and diffs again afterwards), and removals are deferred. 30/30 runs pass. `REPEAT=N scripts/visual/run-all.sh` catches such flakiness. |
 | R7 | iced_tiny_skia 0.14 misplaces scaled raster images: it truncates the position in image space, so an upscaled image moves by up to the scale factor (found by `scenarios/content.sh`). | durst scales raster icons to their display size itself (`ui::icons::scaled`). HiDPI output scaling can still shift by up to the scale factor; report upstream. |
 
 Open, to decide during implementation:

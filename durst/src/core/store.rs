@@ -145,6 +145,19 @@ impl Store {
         self.entries.iter().find(|e| e.notification.id == id)
     }
 
+    /// all entries, the visible ones first
+    pub fn iter(&self) -> impl Iterator<Item = &Entry> {
+        self.entries.iter()
+    }
+
+    /// the visible entry that arrived last
+    pub fn newest_visible(&self, general: &General) -> Option<u32> {
+        self.visible(general)
+            .iter()
+            .max_by_key(|e| e.seq)
+            .map(|e| e.notification.id)
+    }
+
     pub fn visible(&self, general: &General) -> &[Entry] {
         let n = match general.max_visible {
             0 => self.entries.len(),

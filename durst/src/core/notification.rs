@@ -12,6 +12,14 @@ pub enum Urgency {
 }
 
 impl Urgency {
+    pub fn name(self) -> &'static str {
+        match self {
+            Urgency::Low => "low",
+            Urgency::Normal => "normal",
+            Urgency::Critical => "critical",
+        }
+    }
+
     pub fn from_byte(b: u8) -> Self {
         match b {
             0 => Urgency::Low,
@@ -97,6 +105,8 @@ pub struct Notification {
     pub hints: Hints,
     /// as sent over D-Bus: -1 = server default, 0 = never, >0 = milliseconds
     pub expire_timeout: i32,
+    /// unix time in seconds
+    pub received: u64,
 }
 
 impl Notification {
@@ -144,6 +154,7 @@ pub fn test_notification(id: u32) -> Notification {
         actions: vec![],
         hints: Hints::default(),
         expire_timeout: -1,
+        received: 0,
     }
 }
 

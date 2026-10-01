@@ -24,6 +24,12 @@ browser = ["xdg-open"]
 # icon theme for icon names; default: gtk-icon-theme-name from GTK's settings.ini
 # icon_theme = "Adwaita"
 
+[history]
+# how many closed notifications are kept for `durstctl history`, 0 = none
+length = 20
+# notifications shown again by `durstctl history pop` don't expire
+sticky = true
+
 # per button: a list of none | close_current | close_all | do_action | open_url
 # do_action invokes the "default" action, or the only action if there is one
 [mouse]
