@@ -44,15 +44,17 @@ with a private D-Bus session (no service activation, no Xwayland), runs the
 scenario, captures a screenshot with `grim` and prints the geometry of every
 notification box as JSON, including the padding around its content. A
 scenario may define a `verify` function; `check` evaluates assertions on the
-measurement and `signals` lists the emitted D-Bus signals. Mouse input goes
+measurement, `signals` lists the emitted D-Bus signals, `snap`/`geom`/`pixel`
+inspect the screen mid-scenario, and a `<scenario>.toml` next to it is used
+as durst's config. The sandbox has its own config and data directories. Mouse input goes
 through `tools/vpointer`, a virtual pointer that lives inside the sandbox.
 The running session, its notification daemon and the screen are not affected.
 
 ```sh
 scripts/visual/run-all.sh    # builds, runs all scenarios, prints ok/FAIL
+# ok   actions
 # ok   close
-# ok   single
-# ok   stack
+# ...
 ```
 
 Screenshots and measurements land in `target/visual/`. Rendering uses iced's
@@ -64,7 +66,7 @@ The detailed milestones are in [PLAN.md](PLAN.md#5-milestones).
 
  - [x] visual test harness
  - [x] M0: zbus + single iced_layershell daemon, TOML config
- - [ ] M1: full notification spec, stack layout, icons, markup, progress, actions, mouse bindings
+ - [x] M1: full notification spec, stack layout, icons, markup, progress, actions, mouse bindings
  - [ ] M2: `durstctl` + control interface, history
  - [ ] M3: rules & modes (DND)
  - [ ] M4: idle pause, fullscreen policy, lock detection

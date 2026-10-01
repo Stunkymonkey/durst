@@ -9,6 +9,29 @@ offset = [20, 20]
 # space between two notifications
 gap = 8
 width = 380
+# notifications shown at once (0 = unlimited); the rest wait, "+N more" shows how many
+max_visible = 5
+# critical before normal before low, then by arrival
+sort_by_urgency = true
+# newest notification next to the anchored edge
+newest_first = false
+# merge identical notifications into one with a counter
+stack_duplicates = true
+# "focused" (the stack stays on that output until it is empty) or "name:<output>"
+output = "focused"
+# command to open links, the URL is appended
+browser = ["xdg-open"]
+# icon theme for icon names; default: gtk-icon-theme-name from GTK's settings.ini
+# icon_theme = "Adwaita"
+
+# per button: a list of none | close_current | close_all | do_action | open_url
+# do_action invokes the "default" action, or the only action if there is one
+[mouse]
+left = ["close_current"]
+middle = ["do_action", "close_current"]
+right = ["close_all"]
+scroll_up = []
+scroll_down = []
 
 [style]
 font_size = 14
@@ -17,14 +40,20 @@ spacing = 8
 icon_size = 48
 background = "#1e1e2ee6"
 foreground = "#cdd6f4"
+link = "#89b4fa"
 border = { width = 2, color = "#89b4fa", radius = 10 }
+progress = { height = 6, color = "#89b4fa", background = "#45475a" }
+action = { padding = 6, background = "#313244", foreground = "#cdd6f4", radius = 6 }
 
 # timeout: "500ms", "5s", "2m" or seconds; 0 = never expire
+# style: overrides for [style]; critical has a built-in red border
 [urgency.low]
 timeout = "5s"
+style = { foreground = "#a6adc8" }
 
 [urgency.normal]
 timeout = "10s"
 
 [urgency.critical]
 timeout = 0
+style = { border.color = "#f38ba8" }

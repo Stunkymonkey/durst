@@ -32,7 +32,7 @@ architecture, the feature specification and the order of implementation.
 | Topic | Decision |
 |---|---|
 | Notification surfaces | One layer surface **per notification**. durst computes the stack positions with margins and reflows the stack on close. |
-| Output | Configurable: `focused` (default), `name:<DP-1>`, or `all` |
+| Output | Configurable: `focused` (default), `name:<DP-1>`; `all` follows in M4 (needs output enumeration) |
 | Content | Body markup, icons & images, progress bar (`value` hint), action buttons |
 | Behavior | Urgency-based timeouts and styles, pause on idle, modes (DND etc.), duplicate stacking |
 | History | In memory as a ring buffer, popable (dunst-like) |
@@ -393,7 +393,17 @@ see the risk table. CI runs fmt, clippy, tests and the visual scenarios via nix.
 - **Done when:** `notify-send a b` shows a popup, it closes on click, and
   `NotificationClosed` is emitted.
 
-### M1 – Notification parity (daily driver)
+### M1 – Notification parity (daily driver) ✅ done 2026-10-02
+
+Outcome: everything below except `output = "all"` (moved to M4, it needs a
+Wayland connection of our own to enumerate outputs). Surfaces are reconciled
+with the store after every event (`App::sync`), timers only run while a
+notification is visible and not hovered, duplicates and stack tags supersede
+the old entry (closed with reason 4). Icon lookup moved from the unmaintained
+`linicon` (no hicolor fallback when the GTK theme is missing) to
+`freedesktop-icons`; raster icons are pre-scaled because of R7. Twelve visual
+scenarios cover the features. The "+N more" indicator is its own surface.
+
 - Full spec (4.1), per-urgency timeouts, hover pause, `replaces_id`.
 - Stack layout with reflow, `max_visible`, anchors, output selection.
 - Icons and images, markup, progress bar, action buttons, duplicate counter,
@@ -416,6 +426,7 @@ see the risk table. CI runs fmt, clippy, tests and the visual scenarios via nix.
 
 ### M4 – Environment awareness
 - Idle pause, fullscreen policy, lock detection (4.7).
+- `output = "all"`: enumerate outputs on our own Wayland connection.
 
 ### M5 – Operations
 - Config hot reload (file watch plus `durstctl reload`), error notification on
@@ -470,6 +481,7 @@ see the risk table. CI runs fmt, clippy, tests and the visual scenarios via nix.
 | R4 | `focused` output depends on the compositor, which places output-less layer surfaces where it likes. | Document it. `name:` is always available for deterministic placement. |
 | R5 | PipeWire API complexity (default node tracking, channel volumes). | Isolate it behind `audio::Backend` with a trait so a `wpctl` fallback stays possible. |
 | R6 | The interactive slider floods PipeWire with updates. | Debounce, and only send the last value. |
+| R7 | iced_tiny_skia 0.14 misplaces scaled raster images: it truncates the position in image space, so an upscaled image moves by up to the scale factor (found by `scenarios/content.sh`). | durst scales raster icons to their display size itself (`ui::icons::scaled`). HiDPI output scaling can still shift by up to the scale factor; report upstream. |
 
 Open, to decide during implementation:
 - Sound playback library (`rodio` in-process vs. spawning `pw-play`).
