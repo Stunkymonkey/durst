@@ -27,33 +27,43 @@ See [PLAN.md](PLAN.md) for the target design and the roadmap.
 
 ## development
 
+Everything needed (toolchain, libraries, test tools) comes from the flake:
+
+```sh
+nix develop
+cargo run -- -v              # fails if another daemon owns org.freedesktop.Notifications
+scripts/notify-test.sh       # manual battery of notifications against any running daemon
+```
+
+An example config with all current options is in [contrib/config.toml](contrib/config.toml).
+
 ### visual tests
 
 `scripts/visual/run.sh <scenario>` starts durst inside an isolated headless sway
-with a private D-Bus session, runs the scenario (e.g. `notify-send` calls),
-captures a screenshot with `grim` and prints the geometry of every
-notification box as JSON. The running session and its notification daemon are
-not affected.
+with a private D-Bus session (no service activation, no Xwayland), runs the
+scenario, captures a screenshot with `grim` and prints the geometry of every
+notification box as JSON, including the padding around its content. A
+scenario may define a `verify` function; `check` evaluates assertions on the
+measurement and `signals` lists the emitted D-Bus signals. Mouse input goes
+through `tools/vpointer`, a virtual pointer that lives inside the sandbox.
+The running session, its notification daemon and the screen are not affected.
 
 ```sh
-cargo build
-nix develop -c scripts/visual/run.sh scripts/visual/scenarios/single.sh
-# screenshot: target/visual/single.png
-# {"size": [1280, 720], "boxes": [{"x": 830, "y": 50, "w": 400, "h": 100}], "gaps": []}
+scripts/visual/run-all.sh    # builds, runs all scenarios, prints ok/FAIL
+# ok   close
+# ok   single
+# ok   stack
 ```
 
-Requires `sway`, `grim`, `dbus-run-session` and `python3` with Pillow.
-Rendering uses iced's software renderer (`ICED_BACKEND=tiny-skia`).
+Screenshots and measurements land in `target/visual/`. Rendering uses iced's
+software renderer (`ICED_BACKEND=tiny-skia`), so pixels are deterministic.
 
 ## ToDo
 
 The detailed milestones are in [PLAN.md](PLAN.md#5-milestones).
 
- - [x] `dbus`: get notifications
- - [x] render
- - [x] multi window
  - [x] visual test harness
- - [ ] M0: zbus + single iced_layershell daemon, TOML config
+ - [x] M0: zbus + single iced_layershell daemon, TOML config
  - [ ] M1: full notification spec, stack layout, icons, markup, progress, actions, mouse bindings
  - [ ] M2: `durstctl` + control interface, history
  - [ ] M3: rules & modes (DND)

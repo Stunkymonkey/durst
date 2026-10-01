@@ -5,9 +5,12 @@ The background colour is taken from the top-left pixel. Boxes are the
 connected regions of non-background pixels, which works as long as
 notifications don't touch each other (gap > 0).
 
-Output (JSON): {"size": [w, h], "boxes": [{"x","y","w","h"}...], "gaps": [...]}
+Output (JSON): {"size": [w, h], "boxes": [{"x","y","w","h","pad"}...], "gaps": [...]}
 Boxes are sorted top to bottom, then left to right; `gaps` holds the vertical
-distance between consecutive boxes.
+distance between consecutive boxes. `pad` is [top, right, bottom, left]: the
+distance from the box edge to its content (text, icons), i.e. everything that
+differs from the box's own background. Clipped text shows up as a bottom pad
+smaller than the top pad.
 """
 import json
 import sys
@@ -59,9 +62,33 @@ def main(path, tolerance=8):
                 and a["x"] + a["w"] <= b["x"] + b["w"] and a["y"] + a["h"] <= b["y"] + b["h"])
 
     boxes = [a for a in boxes if not any(inside(a, b) for b in boxes)]
+    for b in boxes:
+        b["pad"] = content_pad(px, b, tolerance)
     boxes.sort(key=lambda b: (b["y"], b["x"]))
     gaps = [b["y"] - (a["y"] + a["h"]) for a, b in zip(boxes, boxes[1:])]
     print(json.dumps({"size": [w, h], "background": bg, "boxes": boxes, "gaps": gaps}))
+
+
+def content_pad(px, b, tolerance, ring=6):
+    """Distance from the box edges to the content inside it.
+
+    The box background is sampled just inside the top edge, below the border;
+    `ring` pixels along the edge (border + rounded corners) are skipped.
+    """
+    x0, y0, x1, y1 = b["x"], b["y"], b["x"] + b["w"] - 1, b["y"] + b["h"] - 1
+    bg = px[(x0 + x1) // 2, y0 + ring]
+    found = None
+    for y in range(y0 + ring, y1 - ring + 1):
+        for x in range(x0 + ring, x1 - ring + 1):
+            p = px[x, y]
+            if any(abs(p[i] - bg[i]) > tolerance * 4 for i in range(3)):
+                if found is None:
+                    found = [x, y, x, y]
+                else:
+                    found = [min(found[0], x), min(found[1], y), max(found[2], x), max(found[3], y)]
+    if found is None:
+        return None
+    return [found[1] - y0, x1 - found[2], y1 - found[3], found[0] - x0]
 
 
 if __name__ == "__main__":

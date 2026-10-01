@@ -1,0 +1,30 @@
+# durst example configuration
+# copy to ~/.config/durst/config.toml; every key is optional
+
+[general]
+# top-left | top | top-right | bottom-left | bottom | bottom-right
+anchor = "top-right"
+# distance from the anchored screen edges: [x, y]
+offset = [20, 20]
+# space between two notifications
+gap = 8
+width = 380
+
+[style]
+font_size = 14
+padding = 12
+spacing = 8
+icon_size = 48
+background = "#1e1e2ee6"
+foreground = "#cdd6f4"
+border = { width = 2, color = "#89b4fa", radius = 10 }
+
+# timeout: "500ms", "5s", "2m" or seconds; 0 = never expire
+[urgency.low]
+timeout = "5s"
+
+[urgency.normal]
+timeout = "10s"
+
+[urgency.critical]
+timeout = 0

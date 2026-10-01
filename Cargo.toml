@@ -2,5 +2,7 @@
 resolver = "2"
 members = [
     "durst",
+    "durst-proto",
     "durstctl",
+    "tools/vpointer",
 ]
