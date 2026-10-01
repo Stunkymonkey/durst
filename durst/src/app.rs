@@ -1,14 +1,13 @@
 //! The iced_layershell daemon: owns all surfaces and turns events into
-//! changes of the [`Store`].
+//! changes of the [`Store`]. After every event, [`App::sync`] reconciles the
+//! open surfaces with the store.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use durst_proto::notifications::CloseReason;
 use iced::widget::text;
-use iced::window;
-use iced::{Color, Element, Subscription, Task};
+use iced::{Color, Element, Subscription, Task, mouse, window};
 use iced_layershell::daemon;
 use iced_layershell::reexport::{
     Anchor as LayerAnchor, KeyboardInteractivity, Layer, NewLayerShellSettings, OutputOption,
@@ -17,36 +16,53 @@ use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
 use iced_layershell::to_layer_message;
 use zbus::Connection;
 
-use crate::config::{Anchor, Config};
-use crate::core::notification::Notification;
-use crate::core::store::{Store, Upsert};
-use crate::dbus::notifications::{self as dbus_notifications, emit_closed};
-use crate::ui;
+use crate::config::{Anchor, Config, MouseAction, Output};
+use crate::core::layout::Margin;
+use crate::core::notification::{Notification, Urgency};
+use crate::core::store::{Insert, Store};
+use crate::dbus::notifications::{self as dbus_notifications, emit_action_invoked, emit_closed};
+use crate::ui::icons::Icon;
+use crate::ui::markup::{self, Run};
+use crate::ui::notification::{self as ui, Content};
 
 const NAMESPACE: &str = "durst";
-/// how often expiry is checked while a notification has a timeout
+/// how often expiry is checked while a notification has a running timer
 const TICK: Duration = Duration::from_millis(100);
 
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 pub enum Message {
     Dbus(dbus_notifications::Event),
-    Clicked(window::Id),
+    Surface(window::Id, ui::Event),
     Tick(Instant),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Key {
+    Notification(u32),
+    /// the "+N more" indicator after the stack
+    More,
 }
 
 struct Surface {
     window: window::Id,
-    icon: Option<PathBuf>,
+    size: (u32, u32),
+    margin: Margin,
+}
+
+/// Parsed content of a notification, prepared once instead of every frame.
+struct Rendered {
+    body: Vec<Run>,
+    icon: Option<Icon>,
 }
 
 pub struct App {
     config: Config,
     store: Store,
     conn: Option<Connection>,
-    /// by notification id
-    surfaces: HashMap<u32, Surface>,
-    windows: HashMap<window::Id, u32>,
+    rendered: HashMap<u32, Rendered>,
+    surfaces: HashMap<Key, Surface>,
+    windows: HashMap<window::Id, Key>,
 }
 
 pub fn run(config: Config) -> Result<(), iced_layershell::Error> {
@@ -78,6 +94,7 @@ impl App {
             config,
             store: Store::default(),
             conn: None,
+            rendered: HashMap::new(),
             surfaces: HashMap::new(),
             windows: HashMap::new(),
         }
@@ -93,6 +110,11 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.handle(message);
+        Task::batch([task, self.sync(Instant::now())])
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         use dbus_notifications::Event;
         match message {
             Message::Dbus(Event::Connected(conn)) => {
@@ -106,11 +128,12 @@ impl App {
             }
             Message::Dbus(Event::Notify(n)) => self.notify(*n),
             Message::Dbus(Event::Close(id)) => self.close(id, CloseReason::Closed),
-            Message::Clicked(window) => match self.windows.get(&window) {
-                Some(&id) => self.close(id, CloseReason::Dismissed),
-                None => Task::none(),
+            Message::Surface(window, event) => match self.windows.get(&window) {
+                Some(&Key::Notification(id)) => self.surface_event(id, event),
+                _ => Task::none(),
             },
             Message::Tick(now) => {
+                self.store.update_timers(&self.config.general, now);
                 let expired = self.store.expired(now);
                 Task::batch(
                     expired
@@ -123,61 +146,68 @@ impl App {
     }
 
     fn view(&self, window: window::Id) -> Element<'_, Message> {
-        let entry = self
-            .windows
-            .get(&window)
-            .and_then(|id| self.store.get(*id).zip(self.surfaces.get(id)));
-        match entry {
-            Some((entry, surface)) => ui::notification::view(
-                &entry.notification,
-                surface.icon.as_deref(),
-                &self.config.style,
-                Message::Clicked(window),
+        let element = match self.windows.get(&window) {
+            Some(Key::Notification(id)) => {
+                let (Some(entry), Some(rendered)) = (self.store.get(*id), self.rendered.get(id))
+                else {
+                    return text("").into();
+                };
+                let content = Content {
+                    notification: &entry.notification,
+                    count: entry.count,
+                    body: &rendered.body,
+                    icon: rendered.icon.as_ref(),
+                };
+                ui::view(content, self.config.style(entry.notification.hints.urgency))
+            }
+            Some(Key::More) => ui::more_view(
+                self.store.waiting(&self.config.general),
+                self.config.style(Urgency::Normal),
             ),
-            None => text("").into(),
-        }
+            None => return text("").into(),
+        };
+        element.map(move |event| Message::Surface(window, event))
     }
 
     fn notify(&mut self, n: Notification) -> Task<Message> {
-        let style = &self.config.style;
-        let width = self.config.general.width;
-        let icon = ui::icons::resolve(&n, style.icon_size);
-        let height = ui::notification::height(&n, icon.is_some(), style, width);
+        let style = self.config.style(n.hints.urgency);
+        let rendered = Rendered {
+            body: markup::parse(&n.body),
+            icon: crate::ui::icons::resolve(
+                &n,
+                style.icon_size,
+                self.config.general.icon_theme.as_deref(),
+            ),
+        };
         let timeout = n.timeout(&self.config.urgency);
         let id = n.id;
-        log::debug!("notification {id}: {width}x{height}, timeout {timeout:?}");
 
-        match self.store.upsert(n, height, timeout, Instant::now()) {
-            Upsert::Added => {
-                let margin = self.margin_of(id);
-                let (window, open) = Message::layershell_open(NewLayerShellSettings {
-                    size: Some((width, height)),
-                    layer: Layer::Overlay,
-                    anchor: layer_anchor(self.config.general.anchor),
-                    exclusive_zone: None,
-                    margin,
-                    keyboard_interactivity: KeyboardInteractivity::None,
-                    output_option: OutputOption::Active,
-                    events_transparent: false,
-                    namespace: Some(NAMESPACE.to_string()),
-                });
-                self.windows.insert(window, id);
-                self.surfaces.insert(id, Surface { window, icon });
-                open
-            }
-            Upsert::Replaced => {
-                let surface = self
-                    .surfaces
-                    .get_mut(&id)
-                    .expect("surface of stored notification");
-                surface.icon = icon;
-                let resize = Task::done(Message::SizeChange {
-                    id: surface.window,
-                    size: (width, height),
-                });
-                Task::batch([resize, self.reflow()])
+        let mut task = Task::none();
+        match self.store.insert(n, 0, timeout, &self.config.general) {
+            Insert::Added | Insert::Replaced => {}
+            Insert::Superseded(old) => {
+                // keep the surface, it now shows the new notification
+                if let Some(surface) = self.surfaces.remove(&Key::Notification(old)) {
+                    self.windows.insert(surface.window, Key::Notification(id));
+                    self.surfaces.insert(Key::Notification(id), surface);
+                }
+                self.rendered.remove(&old);
+                task = self.emit_closed(old, CloseReason::Undefined);
             }
         }
+        // the height depends on the duplicate counter, known only now
+        let entry = self.store.get(id).expect("just inserted");
+        let content = Content {
+            notification: &entry.notification,
+            count: entry.count,
+            body: &rendered.body,
+            icon: rendered.icon.as_ref(),
+        };
+        let height = ui::height(&content, style, self.config.general.width);
+        log::debug!("notification {id}: height {height}, timeout {timeout:?}");
+        self.store.set_height(id, height);
+        self.rendered.insert(id, rendered);
+        task
     }
 
     fn close(&mut self, id: u32, reason: CloseReason) -> Task<Message> {
@@ -185,35 +215,226 @@ impl App {
             return Task::none();
         }
         log::debug!("close {id}: {reason:?}");
-        let mut tasks = vec![self.reflow()];
-        if let Some(surface) = self.surfaces.remove(&id) {
-            self.windows.remove(&surface.window);
-            tasks.push(Task::done(Message::RemoveWindow(surface.window)));
+        self.rendered.remove(&id);
+        self.emit_closed(id, reason)
+    }
+
+    fn close_all(&mut self) -> Task<Message> {
+        let ids: Vec<u32> = self
+            .store
+            .visible(&self.config.general)
+            .iter()
+            .map(|e| e.notification.id)
+            .collect();
+        Task::batch(
+            ids.into_iter()
+                .map(|id| self.close(id, CloseReason::Dismissed)),
+        )
+    }
+
+    fn surface_event(&mut self, id: u32, event: ui::Event) -> Task<Message> {
+        log::debug!("surface event of {id}: {event:?}");
+        let mouse = &self.config.mouse;
+        match event {
+            ui::Event::Press(button) => {
+                let actions = match button {
+                    mouse::Button::Left => mouse.left.clone(),
+                    mouse::Button::Middle => mouse.middle.clone(),
+                    mouse::Button::Right => mouse.right.clone(),
+                    _ => vec![],
+                };
+                self.mouse_actions(id, &actions)
+            }
+            ui::Event::Scroll(y) if y > 0.0 => {
+                let actions = mouse.scroll_up.clone();
+                self.mouse_actions(id, &actions)
+            }
+            ui::Event::Scroll(y) if y < 0.0 => {
+                let actions = mouse.scroll_down.clone();
+                self.mouse_actions(id, &actions)
+            }
+            ui::Event::Scroll(_) => Task::none(),
+            ui::Event::Hover(hovered) => {
+                self.store.set_hovered(id, hovered);
+                Task::none()
+            }
+            ui::Event::Action(key) => {
+                let invoke = self.invoke(id, &key);
+                Task::batch([invoke, self.close_after_action(id)])
+            }
+            ui::Event::Link(url) => {
+                self.open_url(&url);
+                Task::none()
+            }
         }
-        if let Some(conn) = self.conn.clone() {
-            tasks.push(Task::future(emit_closed(conn, id, reason)).discard());
+    }
+
+    fn mouse_actions(&mut self, id: u32, actions: &[MouseAction]) -> Task<Message> {
+        let mut tasks = Vec::new();
+        let mut invoked = false;
+        for action in actions {
+            match action {
+                MouseAction::None => {}
+                MouseAction::CloseCurrent if invoked => tasks.push(self.close_after_action(id)),
+                MouseAction::CloseCurrent => tasks.push(self.close(id, CloseReason::Dismissed)),
+                MouseAction::CloseAll => tasks.push(self.close_all()),
+                MouseAction::DoAction => {
+                    let key = self
+                        .store
+                        .get(id)
+                        .and_then(|e| default_action(&e.notification));
+                    if let Some(key) = key {
+                        tasks.push(self.invoke(id, &key));
+                        invoked = true;
+                    }
+                }
+                MouseAction::OpenUrl => {
+                    let url = self
+                        .rendered
+                        .get(&id)
+                        .and_then(|r| markup::first_link(&r.body))
+                        .map(str::to_owned);
+                    if let Some(url) = url {
+                        self.open_url(&url);
+                    }
+                }
+            }
         }
         Task::batch(tasks)
     }
 
-    fn margin_of(&self, id: u32) -> Option<(i32, i32, i32, i32)> {
-        self.store
-            .margins(&self.config.general)
-            .into_iter()
-            .find_map(|(i, m)| (i == id).then_some(m))
+    fn invoke(&self, id: u32, key: &str) -> Task<Message> {
+        log::debug!("invoke action {key:?} of {id}");
+        match self.conn.clone() {
+            Some(conn) => Task::future(emit_action_invoked(conn, id, key.to_owned())).discard(),
+            None => Task::none(),
+        }
     }
 
-    /// Moves every surface to its current place in the stack.
-    fn reflow(&self) -> Task<Message> {
-        Task::batch(
-            self.store
-                .margins(&self.config.general)
-                .into_iter()
-                .filter_map(|(id, margin)| {
-                    let window = self.surfaces.get(&id)?.window;
-                    Some(Task::done(Message::MarginChange { id: window, margin }))
-                }),
-        )
+    /// After an action the notification closes, unless it asked to stay.
+    fn close_after_action(&mut self, id: u32) -> Task<Message> {
+        match self.store.get(id) {
+            Some(e) if e.notification.hints.resident => Task::none(),
+            _ => self.close(id, CloseReason::Dismissed),
+        }
+    }
+
+    fn open_url(&self, url: &str) {
+        let Some((program, args)) = self.config.general.browser.split_first() else {
+            return;
+        };
+        log::debug!("open {url} with {program}");
+        match std::process::Command::new(program)
+            .args(args)
+            .arg(url)
+            .spawn()
+        {
+            // reap the child so it doesn't stay a zombie
+            Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
+            Err(e) => log::warn!("cannot run {program}: {e}"),
+        }
+    }
+
+    fn emit_closed(&self, id: u32, reason: CloseReason) -> Task<Message> {
+        match self.conn.clone() {
+            Some(conn) => Task::future(emit_closed(conn, id, reason)).discard(),
+            None => Task::none(),
+        }
+    }
+
+    /// Opens, moves, resizes and closes surfaces to match the store.
+    fn sync(&mut self, now: Instant) -> Task<Message> {
+        let general = &self.config.general;
+        self.store.update_timers(general, now);
+
+        let mut wanted: Vec<(Key, u32)> = self
+            .store
+            .visible(general)
+            .iter()
+            .map(|e| (Key::Notification(e.notification.id), e.height))
+            .collect();
+        let waiting = self.store.waiting(general);
+        let more_height =
+            (waiting > 0).then(|| ui::more_height(waiting, self.config.style(Urgency::Normal)));
+        wanted.extend(more_height.map(|h| (Key::More, h)));
+        let margins = self.store.margins(general, more_height);
+
+        let mut tasks = Vec::new();
+        let was_empty = self.surfaces.is_empty();
+        let windows = &mut self.windows;
+        self.surfaces.retain(|key, surface| {
+            let keep = wanted.iter().any(|(k, _)| k == key);
+            if !keep {
+                windows.remove(&surface.window);
+                tasks.push(Task::done(Message::RemoveWindow(surface.window)));
+            }
+            keep
+        });
+
+        for ((key, height), margin) in wanted.into_iter().zip(margins) {
+            let size = (general.width, height);
+            match self.surfaces.get_mut(&key) {
+                Some(surface) => {
+                    if surface.size != size {
+                        surface.size = size;
+                        tasks.push(Task::done(Message::SizeChange {
+                            id: surface.window,
+                            size,
+                        }));
+                    }
+                    if surface.margin != margin {
+                        surface.margin = margin;
+                        tasks.push(Task::done(Message::MarginChange {
+                            id: surface.window,
+                            margin,
+                        }));
+                    }
+                }
+                None => {
+                    let (window, open) = Message::layershell_open(NewLayerShellSettings {
+                        size: Some(size),
+                        layer: Layer::Overlay,
+                        anchor: layer_anchor(general.anchor),
+                        exclusive_zone: None,
+                        margin: Some(margin),
+                        keyboard_interactivity: KeyboardInteractivity::None,
+                        output_option: match &general.output {
+                            Output::Focused => OutputOption::LastOutput,
+                            Output::Name(name) => OutputOption::OutputName(name.clone()),
+                        },
+                        events_transparent: false,
+                        namespace: Some(NAMESPACE.to_string()),
+                    });
+                    self.windows.insert(window, key);
+                    self.surfaces.insert(
+                        key,
+                        Surface {
+                            window,
+                            size,
+                            margin,
+                        },
+                    );
+                    tasks.push(open);
+                }
+            }
+        }
+
+        // with an empty stack, the next notification may go to another output
+        if !was_empty && self.surfaces.is_empty() && general.output == Output::Focused {
+            tasks.push(Task::done(Message::ForgetLastOutput));
+        }
+        Task::batch(tasks)
+    }
+}
+
+/// The action triggered by clicking: "default", or the only one there is.
+fn default_action(n: &Notification) -> Option<String> {
+    match &n.actions[..] {
+        [(key, _)] => Some(key.clone()),
+        actions => actions
+            .iter()
+            .find(|(key, _)| key == "default")
+            .map(|(key, _)| key.clone()),
     }
 }
 

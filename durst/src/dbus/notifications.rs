@@ -10,9 +10,16 @@ use zbus::fdo::{self, RequestNameFlags, RequestNameReply};
 use zbus::zvariant::{OwnedValue, Value};
 use zbus::{Connection, interface};
 
-use crate::core::notification::{Hints, Notification, Urgency, pair_actions};
+use crate::core::notification::{Hints, ImageData, Notification, Urgency, pair_actions};
 
-const CAPABILITIES: &[&str] = &["body", "icon-static"];
+const CAPABILITIES: &[&str] = &[
+    "actions",
+    "body",
+    "body-hyperlinks",
+    "body-markup",
+    "icon-static",
+    "x-dunst-stack-tag",
+];
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -115,6 +122,21 @@ pub async fn serve(events: Sender<Event>) -> Result<Connection, String> {
     }
 }
 
+pub async fn emit_action_invoked(conn: Connection, id: u32, key: String) {
+    if let Err(e) = conn
+        .emit_signal(
+            None::<&str>,
+            OBJECT_PATH,
+            INTERFACE,
+            "ActionInvoked",
+            &(id, key),
+        )
+        .await
+    {
+        log::warn!("cannot emit ActionInvoked: {e}");
+    }
+}
+
 pub async fn emit_closed(conn: Connection, id: u32, reason: CloseReason) {
     let body = (id, reason as u32);
     if let Err(e) = conn
@@ -159,12 +181,43 @@ fn parse_hints(hints: &HashMap<String, OwnedValue>) -> Hints {
         category: string("category"),
         desktop_entry: string("desktop-entry"),
         image_path: string("image-path").or_else(|| string("image_path")),
+        image_data: ["image-data", "image_data", "icon_data"]
+            .into_iter()
+            .find_map(|key| get(key).and_then(image_data)),
         transient: boolean("transient"),
         resident: boolean("resident"),
         value: int("value").map(|v| v.clamp(0, 100) as i32),
         stack_tag: string("x-dunst-stack-tag")
             .or_else(|| string("x-canonical-private-synchronous")),
     }
+}
+
+/// `(iiibiiay)`: width, height, rowstride, has_alpha, bits per sample,
+/// channels, data
+fn image_data(v: &Value) -> Option<ImageData> {
+    let Value::Structure(s) = v else {
+        return None;
+    };
+    let f = s.fields();
+    let int = |i: usize| match f.get(i)? {
+        Value::I32(n) => Some(*n),
+        _ => None,
+    };
+    let (Some(Value::Bool(alpha)), Some(Value::Array(data))) = (f.get(3), f.get(6)) else {
+        return None;
+    };
+    let bytes: Vec<u8> = data
+        .iter()
+        .map(|b| match b {
+            Value::U8(b) => Some(*b),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    let img = ImageData::from_spec(int(0)?, int(1)?, int(2)?, *alpha, int(4)?, int(5)?, &bytes);
+    if img.is_none() {
+        log::warn!("ignoring malformed image-data hint");
+    }
+    img
 }
 
 /// Some clients wrap hint values in an extra variant.
@@ -201,6 +254,17 @@ mod tests {
         assert_eq!(h.value, Some(100));
         assert!(h.transient);
         assert_eq!(h.stack_tag.as_deref(), Some("volume"));
+    }
+
+    #[test]
+    fn parses_image_data() {
+        let data: Vec<u8> = vec![255; 2 * 2 * 4];
+        let value = Value::from(zbus::zvariant::Structure::from((
+            2i32, 2i32, 8i32, true, 8i32, 4i32, data,
+        )));
+        let h = hints(&[("image-data", value)]);
+        let img = h.image_data.unwrap();
+        assert_eq!((img.width, img.height, img.rgba.len()), (2, 2, 16));
     }
 
     #[test]

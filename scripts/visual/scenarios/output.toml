@@ -1,0 +1,3 @@
+[general]
+output = "name:HEADLESS-1"
+anchor = "bottom-left"

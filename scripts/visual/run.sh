@@ -15,11 +15,18 @@
 # may use these helpers:
 #   notify ARGS...      notify-send that prints the notification id
 #   click X Y [BUTTON]  click on the screen (BUTTON: left, right, middle)
+#   pointer X Y         move the pointer
+#   scroll DY           scroll at the pointer, positive is down
 #   signals             print the org.freedesktop.Notifications signals so far
 #   wait_for CMD...     retry CMD for up to 3s
-# It may define `verify`, called after the screenshot with $MEASURE pointing
-# to the measurement JSON; a non-zero return fails the run. `check EXPR`
-# evaluates a Python expression over `boxes`, `gaps` and `size`.
+#   snap                screenshot + measure now; `geom I KEY` then prints
+#                       boxes[I][KEY] (x, y, w, h, bottom, right)
+#   pixel X Y           "R G B" of the last screenshot (snap or final)
+# $DURST_TEST_DIR is a scratch directory, also visible to durst.
+# A file `<scenario>.toml` next to the scenario is used as durst's config.
+# The scenario may define `verify`, called after the screenshot with $MEASURE
+# pointing to the measurement JSON; a non-zero return fails the run.
+# `check EXPR` evaluates a Python expression over `boxes`, `gaps` and `size`.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -82,6 +89,14 @@ wait_for sh -c "swaymsg -t get_seats -r | grep -q '\"capabilities\": [1-9]'" \
 dbus-monitor --session "type='signal',interface='org.freedesktop.Notifications'" \
     >"$work/signals" 2>/dev/null &
 
+export DURST_TEST_DIR="$work"
+# scenarios can provide icon themes and .desktop files in $DURST_TEST_DIR/share
+export XDG_DATA_DIRS="$work/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+# never read the real user's durst or GTK config
+export XDG_CONFIG_HOME="$work/config"
+config="${scenario%.sh}.toml"
+if [[ -f "$config" ]]; then DURST_ARGS="-c $config ${DURST_ARGS:-}"; fi
+
 # software rendering: no GPU in headless sway, and deterministic pixels
 # shellcheck disable=SC2086
 ICED_BACKEND="${ICED_BACKEND:-tiny-skia}" LD_LIBRARY_PATH="$durst_ld" RUST_LOG="${RUST_LOG:-durst=debug}" \
@@ -91,6 +106,16 @@ wait_for busctl --user status org.freedesktop.Notifications \
     || { echo "durst did not claim the bus name, see $log/durst.log" >&2; KEEP_LOGS=1; exit 1; }
 
 notify() { notify-send -p "$@"; }
+# send SUMMARY BODY [ACTIONS] [HINTS] [TIMEOUT] via gdbus (non-blocking, unlike
+# notify-send -A); ACTIONS/HINTS in GVariant text format, prints the id
+send() {
+    local actions="${3:-[]}" hints='@a{sv} {}' timeout="${5:--1}"
+    [[ -n "${4:-}" ]] && hints="$4"
+    gdbus call --session --dest org.freedesktop.Notifications \
+        --object-path /org/freedesktop/Notifications \
+        --method org.freedesktop.Notifications.Notify -- \
+        test 0 "" "$1" "$2" "$actions" "$hints" "$timeout" | sed -E 's/.*uint32 ([0-9]+).*/\1/'
+}
 # one line per signal: "<member> <args...>"
 signals() {
     awk '/^signal/ { if (line) print line; match($0, /member=[A-Za-z]+/); line = substr($0, RSTART + 7, RLENGTH - 7); next }
@@ -99,7 +124,31 @@ signals() {
 }
 click() {
     printf 'move %s %s\nclick %s\n' "$1" "$2" "${3:-left}" >&3
-    sleep 0.1
+    sleep 0.2
+}
+pointer() {
+    printf 'move %s %s\n' "$1" "$2" >&3
+    sleep 0.2
+}
+scroll() {
+    printf 'scroll %s\n' "$1" >&3
+    sleep 0.2
+}
+last_png=""
+snap() {
+    sleep 0.3
+    last_png="$work/snap.png"
+    grim -o HEADLESS-1 "$last_png"
+    python3 "$here/measure.py" "$last_png" >"$work/snap.json"
+}
+geom() {
+    python3 -c "import json,sys; b=json.load(open('$work/snap.json'))['boxes'][int(sys.argv[1])]
+b['bottom'] = b['y'] + b['h'] - 1; b['right'] = b['x'] + b['w'] - 1
+print(b[sys.argv[2]])" "$1" "$2"
+}
+pixel() {
+    python3 -c "from PIL import Image; import sys
+print(*Image.open('$last_png').convert('RGB').getpixel((int(sys.argv[1]), int(sys.argv[2]))))" "$1" "$2"
 }
 check() {
     python3 - "$1" <<EOF
@@ -117,6 +166,7 @@ source "$scenario"
 
 sleep "${SETTLE:-1}"
 grim -o HEADLESS-1 "$out"
+last_png="$out"
 export MEASURE="${out%.png}.json"
 python3 "$here/measure.py" "$out" >"$MEASURE"
 echo "screenshot: $out" >&2

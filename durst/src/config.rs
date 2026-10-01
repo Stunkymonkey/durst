@@ -5,13 +5,58 @@ use serde::{Deserialize, Deserializer, de};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-#[derive(Deserialize, Debug, Clone, Default)]
-#[serde(default, deny_unknown_fields)]
+use crate::core::notification::Urgency;
+
+#[derive(Debug, Clone)]
 pub struct Config {
     pub general: General,
-    pub style: Style,
+    pub mouse: Mouse,
     pub urgency: Urgencies,
+    /// the base style with each urgency's overrides applied, see [`Config::style`]
+    styles: [Style; 3],
 }
+
+impl Config {
+    pub fn style(&self, urgency: Urgency) -> &Style {
+        &self.styles[urgency as usize]
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        parse("").expect("default config")
+    }
+}
+
+/// The config as written; styles are kept as tables so per-urgency overrides
+/// can be merged over the base style before they are deserialized.
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct RawConfig {
+    general: General,
+    mouse: Mouse,
+    style: toml::Table,
+    urgency: RawUrgencies,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct RawUrgencies {
+    low: RawUrgency,
+    normal: RawUrgency,
+    critical: RawUrgency,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct RawUrgency {
+    timeout: Option<Timeout>,
+    style: toml::Table,
+}
+
+/// Overrides applied between the user's base style and their per-urgency
+/// style, so critical notifications stand out unless configured otherwise.
+const DEFAULT_URGENCY_STYLES: [&str; 3] = ["", "", "border.color = \"#f38ba8\""];
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default, deny_unknown_fields)]
@@ -22,6 +67,19 @@ pub struct General {
     /// space between two notifications
     pub gap: u32,
     pub width: u32,
+    /// how many notifications are shown at once, 0 = unlimited; the rest wait
+    pub max_visible: usize,
+    /// critical before normal before low, then by arrival
+    pub sort_by_urgency: bool,
+    /// put the newest notification next to the anchored edge
+    pub newest_first: bool,
+    /// merge identical notifications into one with a counter
+    pub stack_duplicates: bool,
+    pub output: Output,
+    /// command used to open links, the URL is appended
+    pub browser: Vec<String>,
+    /// icon theme for icon names; default: GTK's `gtk-icon-theme-name`
+    pub icon_theme: Option<String>,
 }
 
 impl Default for General {
@@ -31,6 +89,13 @@ impl Default for General {
             offset: [20, 20],
             gap: 8,
             width: 380,
+            max_visible: 5,
+            sort_by_urgency: true,
+            newest_first: false,
+            stack_duplicates: true,
+            output: Output::Focused,
+            browser: vec!["xdg-open".into()],
+            icon_theme: None,
         }
     }
 }
@@ -52,13 +117,72 @@ impl Anchor {
     }
 }
 
+/// `"focused"` or `"name:<output>"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Output {
+    /// the output with keyboard focus when the first notification appears;
+    /// the stack stays there until it is empty
+    Focused,
+    Name(String),
+}
+
+impl<'de> Deserialize<'de> for Output {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        match s.as_str() {
+            "focused" => Ok(Output::Focused),
+            _ => match s.strip_prefix("name:") {
+                Some(name) if !name.is_empty() => Ok(Output::Name(name.to_owned())),
+                _ => Err(de::Error::custom(format!(
+                    "invalid output {s:?}, expected \"focused\" or \"name:<output>\""
+                ))),
+            },
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MouseAction {
+    None,
+    CloseCurrent,
+    CloseAll,
+    /// invoke the "default" action, or the only action if there is just one
+    DoAction,
+    /// open the first link of the body
+    OpenUrl,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub struct Mouse {
+    pub left: Vec<MouseAction>,
+    pub middle: Vec<MouseAction>,
+    pub right: Vec<MouseAction>,
+    pub scroll_up: Vec<MouseAction>,
+    pub scroll_down: Vec<MouseAction>,
+}
+
+impl Default for Mouse {
+    fn default() -> Self {
+        use MouseAction::*;
+        Self {
+            left: vec![CloseCurrent],
+            middle: vec![DoAction, CloseCurrent],
+            right: vec![CloseAll],
+            scroll_up: vec![],
+            scroll_down: vec![],
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default, deny_unknown_fields)]
 pub struct Style {
     pub font_size: f32,
     /// inner space between border and content
     pub padding: u32,
-    /// space between icon and text, and between summary and body
+    /// space between icon and text, and between the parts of the text
     pub spacing: u32,
     pub icon_size: u32,
     #[serde(deserialize_with = "color")]
@@ -66,6 +190,11 @@ pub struct Style {
     #[serde(deserialize_with = "color")]
     pub foreground: Color,
     pub border: Border,
+    pub progress: Progress,
+    pub action: Action,
+    /// color of links in the body
+    #[serde(deserialize_with = "color")]
+    pub link: Color,
 }
 
 impl Default for Style {
@@ -78,6 +207,9 @@ impl Default for Style {
             background: Color::from_rgba8(0x1e, 0x1e, 0x2e, 0.9),
             foreground: Color::from_rgb8(0xcd, 0xd6, 0xf4),
             border: Border::default(),
+            progress: Progress::default(),
+            action: Action::default(),
+            link: Color::from_rgb8(0x89, 0xb4, 0xfa),
         }
     }
 }
@@ -103,32 +235,74 @@ impl Default for Border {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default, deny_unknown_fields)]
+pub struct Progress {
+    pub height: u32,
+    #[serde(deserialize_with = "color")]
+    pub color: Color,
+    #[serde(deserialize_with = "color")]
+    pub background: Color,
+}
+
+impl Default for Progress {
+    fn default() -> Self {
+        Self {
+            height: 6,
+            color: Color::from_rgb8(0x89, 0xb4, 0xfa),
+            background: Color::from_rgb8(0x45, 0x47, 0x5a),
+        }
+    }
+}
+
+/// buttons for the notification's actions
+#[derive(Deserialize, Debug, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub struct Action {
+    pub padding: u32,
+    #[serde(deserialize_with = "color")]
+    pub background: Color,
+    #[serde(deserialize_with = "color")]
+    pub foreground: Color,
+    pub radius: f32,
+}
+
+impl Default for Action {
+    fn default() -> Self {
+        Self {
+            padding: 6,
+            background: Color::from_rgb8(0x31, 0x32, 0x44),
+            foreground: Color::from_rgb8(0xcd, 0xd6, 0xf4),
+            radius: 6.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Urgencies {
     pub low: UrgencyConfig,
     pub normal: UrgencyConfig,
     pub critical: UrgencyConfig,
 }
 
-impl Default for Urgencies {
-    fn default() -> Self {
-        let secs = |s| UrgencyConfig {
-            timeout: Timeout(Some(Duration::from_secs(s))),
-        };
-        Self {
-            low: secs(5),
-            normal: secs(10),
-            critical: UrgencyConfig {
-                timeout: Timeout(None),
-            },
+impl Urgencies {
+    pub fn get(&self, urgency: Urgency) -> &UrgencyConfig {
+        match urgency {
+            Urgency::Low => &self.low,
+            Urgency::Normal => &self.normal,
+            Urgency::Critical => &self.critical,
         }
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct UrgencyConfig {
     pub timeout: Timeout,
 }
+
+const DEFAULT_TIMEOUTS: [Timeout; 3] = [
+    Timeout(Some(Duration::from_secs(5))),
+    Timeout(Some(Duration::from_secs(10))),
+    Timeout(None),
+];
 
 /// `None` means the notification never expires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,6 +357,19 @@ fn color<'de, D: Deserializer<'de>>(d: D) -> Result<Color, D::Error> {
     parse_color(&String::deserialize(d)?).map_err(de::Error::custom)
 }
 
+/// Merges `over` into `base`; nested tables are merged, other values replaced.
+/// Dotted keys like `border.color = ...` are nested tables in TOML already.
+fn merge(base: &mut toml::Table, over: &toml::Table) {
+    for (key, value) in over {
+        match (base.get_mut(key), value) {
+            (Some(toml::Value::Table(b)), toml::Value::Table(o)) => merge(b, o),
+            _ => {
+                base.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
 pub fn default_path() -> PathBuf {
     let config_home = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -204,8 +391,43 @@ pub fn load(path: &Path, explicit: bool) -> Result<Config, String> {
     }
 }
 
-pub fn parse(s: &str) -> Result<Config, toml::de::Error> {
-    toml::from_str(s)
+pub fn parse(s: &str) -> Result<Config, String> {
+    let raw: RawConfig = toml::from_str(s).map_err(|e| e.to_string())?;
+    let urgencies = [&raw.urgency.low, &raw.urgency.normal, &raw.urgency.critical];
+
+    let mut styles = Vec::with_capacity(3);
+    let mut timeouts = Vec::with_capacity(3);
+    for (i, (urgency, name)) in urgencies
+        .iter()
+        .zip(["low", "normal", "critical"])
+        .enumerate()
+    {
+        let mut table = raw.style.clone();
+        merge(
+            &mut table,
+            &toml::from_str(DEFAULT_URGENCY_STYLES[i]).unwrap(),
+        );
+        merge(&mut table, &urgency.style);
+        let style = toml::Value::Table(table)
+            .try_into::<Style>()
+            .map_err(|e| format!("in [style] or [urgency.{name}.style]: {e}"))?;
+        styles.push(style);
+        timeouts.push(urgency.timeout.unwrap_or(DEFAULT_TIMEOUTS[i]));
+    }
+    let timeout = |i: usize| UrgencyConfig {
+        timeout: timeouts[i],
+    };
+
+    Ok(Config {
+        general: raw.general,
+        mouse: raw.mouse,
+        urgency: Urgencies {
+            low: timeout(0),
+            normal: timeout(1),
+            critical: timeout(2),
+        },
+        styles: styles.try_into().unwrap(),
+    })
 }
 
 #[cfg(test)]
@@ -217,6 +439,7 @@ mod tests {
         let c = parse("").unwrap();
         assert_eq!(c.general.anchor, Anchor::TopRight);
         assert_eq!(c.urgency.critical.timeout, Timeout(None));
+        assert_eq!(c.mouse.right, vec![MouseAction::CloseAll]);
     }
 
     #[test]
@@ -226,9 +449,49 @@ mod tests {
 
     #[test]
     fn unknown_key_is_reported_with_location() {
-        let err = parse("[general]\nwidht = 3\n").unwrap_err().to_string();
+        let err = parse("[general]\nwidht = 3\n").unwrap_err();
         assert!(err.contains("widht"), "{err}");
         assert!(err.contains("line 2"), "{err}");
+    }
+
+    #[test]
+    fn unknown_style_key_names_the_section() {
+        let err = parse("[urgency.low.style]\nborder.colr = \"#000000\"\n").unwrap_err();
+        assert!(err.contains("colr") && err.contains("urgency.low"), "{err}");
+    }
+
+    #[test]
+    fn urgency_styles_are_merged_over_the_base() {
+        let c = parse(
+            r##"
+            [style]
+            font_size = 20
+            border = { width = 3, color = "#000000" }
+            [urgency.low.style]
+            border.width = 1
+            "##,
+        )
+        .unwrap();
+        let low = c.style(Urgency::Low);
+        assert_eq!((low.font_size, low.border.width), (20.0, 1));
+        assert_eq!(low.border.color, Color::BLACK);
+        let normal = c.style(Urgency::Normal);
+        assert_eq!(
+            (normal.border.width, normal.border.color),
+            (3, Color::BLACK)
+        );
+        // the built-in critical color sits between base and user override
+        let critical = c.style(Urgency::Critical);
+        assert_eq!(critical.border.color, parse_color("#f38ba8").unwrap());
+        assert_eq!(critical.border.width, 3);
+    }
+
+    #[test]
+    fn output() {
+        let c = parse("[general]\noutput = \"name:DP-1\"").unwrap();
+        assert_eq!(c.general.output, Output::Name("DP-1".into()));
+        assert!(parse("[general]\noutput = \"name:\"").is_err());
+        assert!(parse("[general]\noutput = \"all\"").is_err());
     }
 
     #[test]
@@ -241,6 +504,7 @@ mod tests {
         let c = parse("[urgency.low]\ntimeout = 0\n[urgency.normal]\ntimeout = \"0\"").unwrap();
         assert_eq!(c.urgency.low.timeout, Timeout(None));
         assert_eq!(c.urgency.normal.timeout, Timeout(None));
+        assert_eq!(c.urgency.critical.timeout, Timeout(None));
     }
 
     #[test]
