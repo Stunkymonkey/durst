@@ -10,6 +10,7 @@ use crate::core::notification::Urgency;
 #[derive(Debug, Clone)]
 pub struct Config {
     pub general: General,
+    pub history: HistoryConfig,
     pub mouse: Mouse,
     pub urgency: Urgencies,
     /// the base style with each urgency's overrides applied, see [`Config::style`]
@@ -34,6 +35,7 @@ impl Default for Config {
 #[serde(default, deny_unknown_fields)]
 struct RawConfig {
     general: General,
+    history: HistoryConfig,
     mouse: Mouse,
     style: toml::Table,
     urgency: RawUrgencies,
@@ -96,6 +98,24 @@ impl Default for General {
             output: Output::Focused,
             browser: vec!["xdg-open".into()],
             icon_theme: None,
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub struct HistoryConfig {
+    /// how many closed notifications are kept, 0 = no history
+    pub length: usize,
+    /// notifications shown again by `durstctl history pop` don't expire
+    pub sticky: bool,
+}
+
+impl Default for HistoryConfig {
+    fn default() -> Self {
+        Self {
+            length: 20,
+            sticky: true,
         }
     }
 }
@@ -420,6 +440,7 @@ pub fn parse(s: &str) -> Result<Config, String> {
 
     Ok(Config {
         general: raw.general,
+        history: raw.history,
         mouse: raw.mouse,
         urgency: Urgencies {
             low: timeout(0),
