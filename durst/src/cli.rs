@@ -1,5 +1,4 @@
-use clap::builder::PossibleValuesParser;
-use clap::{Arg, Command};
+use clap::{Arg, ArgAction, Command};
 
 pub fn build_cli() -> Command {
     Command::new(env!("CARGO_PKG_NAME"))
@@ -8,24 +7,16 @@ pub fn build_cli() -> Command {
         .version(env!("CARGO_PKG_VERSION"))
         .arg(
             Arg::new("verbose")
-                .help("turn on debugging information")
+                .help("more log output, repeat for more (RUST_LOG overrides)")
                 .long("verbose")
-                .short('v'),
+                .short('v')
+                .action(ArgAction::Count),
         )
         .arg(
-            Arg::new("config-path")
+            Arg::new("config")
                 .value_name("FILE")
-                .help("Use alternative config file")
+                .help("use an alternative config file")
                 .long("config")
                 .short('c'),
-            // .takes_value(true),
-        )
-        .arg(
-            Arg::new("mode")
-                .help("Overwrite the automatic output-mode")
-                .long("force-output")
-                .short('o')
-                .value_name("MODE")
-                .value_parser(PossibleValuesParser::new(["wayland", "xorg", "stdout"])),
         )
 }

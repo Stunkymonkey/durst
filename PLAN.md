@@ -372,7 +372,15 @@ show_on_track_change = true
 
 Each milestone ends with a working, tagged build.
 
-### M0 – Foundation (core rework)
+### M0 – Foundation (core rework) ✅ done 2026-10-01
+
+Outcome: iced 0.14 + iced_layershell 0.19.1 (pinned, `default-features = false`
+because its portal-based theme detection blocks startup), zbus 5, TOML config,
+`durst-proto`, flake on current nixpkgs (Rust 1.98) with the harness tools.
+`winit-core`/`winit-common` are pinned to `0.31.0-beta.2` in `Cargo.lock`:
+`iced_exdevtools` 0.19.1 doesn't build against beta.3 (R2). R1 is resolved,
+see the risk table. CI runs fmt, clippy, tests and the visual scenarios via nix.
+
 - Replace `dbus`, `dbus-tree` and `dbus-codegen` with `zbus`. Delete `build.rs`
   codegen and the XML file, and keep `build.rs` only for completions.
 - Upgrade `iced` / `iced_layershell` to versions that support daemon
@@ -443,7 +451,10 @@ Each milestone ends with a working, tagged build.
   isolated headless sway (`WLR_BACKENDS=headless`, pixman renderer) with a
   private D-Bus session, executes the scenario's `notify-send`/`gdbus` calls,
   captures the output with `grim` and prints every box's geometry as JSON
-  (`scripts/visual/measure.py`). iced renders with tiny-skia, so pixels are
+  (`scripts/visual/measure.py`), including the padding around the content.
+  Mouse input comes from `tools/vpointer` (wlr-virtual-pointer inside the
+  sandbox). Scenarios assert with `verify`/`check` and the emitted signals;
+  `run-all.sh` runs everything. iced renders with tiny-skia, so pixels are
   deterministic. This lets layout changes be checked automatically against
   expected positions, heights and gaps, and the PNG can be inspected. Scenarios
   live in `scripts/visual/scenarios/`. Later: golden-image comparison in CI.
@@ -453,8 +464,8 @@ Each milestone ends with a working, tagged build.
 
 | # | Risk | Mitigation |
 |---|---|---|
-| R1 | With one surface per notification, durst must know each surface's height before positioning the ones below. | Do a spike in M0: measure text with iced's `Paragraph` API, using the same font and width as the view. Fallback: render first, report the size from a measuring widget, then send `SizeChange` and reflow. Verified with the visual harness (§6): `scenarios/stack.sh` must give non-overlapping boxes whose `gaps` all equal `general.gap`, and each box height must match the predicted height. |
-| R2 | iced_layershell API churn between versions | Pin the versions and keep all layer-shell calls in `app.rs`. |
+| R1 | With one surface per notification, durst must know each surface's height before positioning the ones below. | **Resolved in M0.** `ui::notification::height` lays out the text with iced's `Paragraph` (same global font system, fonts, shaping and wrapping as the view). `scenarios/stack.sh` verifies it: four notifications of different heights, gaps exactly `general.gap`, and the top and bottom padding around the rendered content within 1–4 px of each other, so nothing is clipped or oversized. Every new UI element (icons, progress, actions) must extend both `height` and `view`, plus a scenario. |
+| R2 | iced_layershell API churn between versions | Pin the versions and keep all layer-shell calls in `app.rs`. Already happened once: the winit-core beta pin (M0). |
 | R3 | Not every compositor implements `wlr-foreign-toplevel-management` (e.g. GNOME). | Optional feature with a graceful fallback. GNOME/KDE aren't targets anyway, since they run their own notification servers. |
 | R4 | `focused` output depends on the compositor, which places output-less layer surfaces where it likes. | Document it. `name:` is always available for deterministic placement. |
 | R5 | PipeWire API complexity (default node tracking, channel volumes). | Isolate it behind `audio::Backend` with a trait so a `wpctl` fallback stays possible. |
