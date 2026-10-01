@@ -439,13 +439,21 @@ Each milestone ends with a working, tagged build.
   replies and signals.
 - **Config:** parse the shipped example config in a test, and check that
   unknown-key errors include line and column.
+- **Visual (closed loop):** `scripts/visual/run.sh <scenario>` runs durst in an
+  isolated headless sway (`WLR_BACKENDS=headless`, pixman renderer) with a
+  private D-Bus session, executes the scenario's `notify-send`/`gdbus` calls,
+  captures the output with `grim` and prints every box's geometry as JSON
+  (`scripts/visual/measure.py`). iced renders with tiny-skia, so pixels are
+  deterministic. This lets layout changes be checked automatically against
+  expected positions, heights and gaps, and the PNG can be inspected. Scenarios
+  live in `scripts/visual/scenarios/`. Later: golden-image comparison in CI.
 - **Manual:** `scripts/notify-test.sh` on sway, Hyprland and niri.
 
 ## 7. Risks & open questions
 
 | # | Risk | Mitigation |
 |---|---|---|
-| R1 | With one surface per notification, durst must know each surface's height before positioning the ones below. | Do a spike in M0: measure text with iced's `Paragraph` API, using the same font and width as the view. Fallback: render first, report the size from a measuring widget, then send `SizeChange` and reflow. |
+| R1 | With one surface per notification, durst must know each surface's height before positioning the ones below. | Do a spike in M0: measure text with iced's `Paragraph` API, using the same font and width as the view. Fallback: render first, report the size from a measuring widget, then send `SizeChange` and reflow. Verified with the visual harness (§6): `scenarios/stack.sh` must give non-overlapping boxes whose `gaps` all equal `general.gap`, and each box height must match the predicted height. |
 | R2 | iced_layershell API churn between versions | Pin the versions and keep all layer-shell calls in `app.rs`. |
 | R3 | Not every compositor implements `wlr-foreign-toplevel-management` (e.g. GNOME). | Optional feature with a graceful fallback. GNOME/KDE aren't targets anyway, since they run their own notification servers. |
 | R4 | `focused` output depends on the compositor, which places output-less layer surfaces where it likes. | Document it. `name:` is always available for deterministic placement. |
@@ -458,7 +466,7 @@ Open, to decide during implementation:
   visible notification.
 - Animations (deliberately out of scope for now).
 
-## 8. Corrections to the current README
+## 8. Corrections to the README (applied)
 
 - `ext-foreign-toplevel-list-v1` doesn't expose fullscreen or activated state,
   so `wlr-foreign-toplevel-management-unstable-v1` is used instead.
