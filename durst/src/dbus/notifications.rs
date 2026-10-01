@@ -3,12 +3,14 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use durst_proto::notifications::{BUS_NAME, CloseReason, INTERFACE, OBJECT_PATH, SPEC_VERSION};
+use durst_proto::notifications::{CloseReason, INTERFACE, OBJECT_PATH, SPEC_VERSION};
 use futures::SinkExt;
 use futures::channel::mpsc::Sender;
-use zbus::fdo::{self, RequestNameFlags, RequestNameReply};
+use zbus::fdo;
 use zbus::zvariant::{OwnedValue, Value};
 use zbus::{Connection, interface};
+
+use super::Event;
 
 use crate::core::notification::{Hints, ImageData, Notification, Urgency, pair_actions};
 
@@ -21,21 +23,19 @@ const CAPABILITIES: &[&str] = &[
     "x-dunst-stack-tag",
 ];
 
-#[derive(Debug, Clone)]
-pub enum Event {
-    /// the bus name is ours; keep the connection to emit signals
-    Connected(Connection),
-    Failed(String),
-    Notify(Box<Notification>),
-    Close(u32),
-}
-
-struct Server {
+pub struct Server {
     events: Sender<Event>,
     next_id: AtomicU32,
 }
 
 impl Server {
+    pub fn new(events: Sender<Event>) -> Self {
+        Self {
+            events,
+            next_id: AtomicU32::new(1),
+        }
+    }
+
     async fn send(&self, event: Event) -> fdo::Result<()> {
         self.events
             .clone()
@@ -76,6 +76,9 @@ impl Server {
             actions: pair_actions(&actions),
             hints: parse_hints(&hints),
             expire_timeout,
+            received: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
         };
         log::debug!("notify {notification:?}");
         self.send(Event::Notify(Box::new(notification))).await?;
@@ -94,31 +97,6 @@ impl Server {
             env!("CARGO_PKG_VERSION"),
             SPEC_VERSION,
         )
-    }
-}
-
-/// Connects to the session bus, serves the interface and claims the
-/// well-known name. Fails if another notification daemon owns it.
-pub async fn serve(events: Sender<Event>) -> Result<Connection, String> {
-    let server = Server {
-        events,
-        next_id: AtomicU32::new(1),
-    };
-    let conn = zbus::connection::Builder::session()
-        .and_then(|b| b.serve_at(OBJECT_PATH, server))
-        .map_err(|e| e.to_string())?
-        .build()
-        .await
-        .map_err(|e| format!("cannot connect to the session bus: {e}"))?;
-    let reply = conn
-        .request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into())
-        .await;
-    match reply {
-        Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => Ok(conn),
-        Ok(_) | Err(zbus::Error::NameTaken) => Err(format!(
-            "{BUS_NAME} is owned by another notification daemon"
-        )),
-        Err(e) => Err(e.to_string()),
     }
 }
 

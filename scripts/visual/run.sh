@@ -17,11 +17,16 @@
 #   click X Y [BUTTON]  click on the screen (BUTTON: left, right, middle)
 #   pointer X Y         move the pointer
 #   scroll DY           scroll at the pointer, positive is down
-#   signals             print the org.freedesktop.Notifications signals so far
+#   signals             print the notification and control interface
+#                       signals so far, one per line: MEMBER ARGS...
 #   wait_for CMD...     retry CMD for up to 3s
 #   snap                screenshot + measure now; `geom I KEY` then prints
 #                       boxes[I][KEY] (x, y, w, h, bottom, right)
 #   pixel X Y           "R G B" of the last screenshot (snap or final)
+#   durstctl ...        the CLI built next to durst
+#   status CMD...       run CMD (stderr dropped) and print its exit code;
+#                       scenarios run with `set -e`, so use this for
+#                       commands that are expected to fail
 # $DURST_TEST_DIR is a scratch directory, also visible to durst.
 # A file `<scenario>.toml` next to the scenario is used as durst's config.
 # The scenario may define `verify`, called after the screenshot with $MEASURE
@@ -87,6 +92,7 @@ wait_for sh -c "swaymsg -t get_seats -r | grep -q '\"capabilities\": [1-9]'" \
     || { echo "virtual pointer missing, see $log/vpointer.log" >&2; KEEP_LOGS=1; exit 1; }
 
 dbus-monitor --session "type='signal',interface='org.freedesktop.Notifications'" \
+    "type='signal',path='/org/durst_notification/Durst'" \
     >"$work/signals" 2>/dev/null &
 
 export DURST_TEST_DIR="$work"
@@ -94,6 +100,8 @@ export DURST_TEST_DIR="$work"
 export XDG_DATA_DIRS="$work/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 # never read the real user's durst or GTK config
 export XDG_CONFIG_HOME="$work/config"
+# durstctl for the scenarios
+export PATH="$root/target/debug:$PATH"
 config="${scenario%.sh}.toml"
 if [[ -f "$config" ]]; then DURST_ARGS="-c $config ${DURST_ARGS:-}"; fi
 
@@ -106,6 +114,7 @@ wait_for busctl --user status org.freedesktop.Notifications \
     || { echo "durst did not claim the bus name, see $log/durst.log" >&2; KEEP_LOGS=1; exit 1; }
 
 notify() { notify-send -p "$@"; }
+status() { "$@" 2>/dev/null && echo 0 || echo $?; }
 # send SUMMARY BODY [ACTIONS] [HINTS] [TIMEOUT] via gdbus (non-blocking, unlike
 # notify-send -A); ACTIONS/HINTS in GVariant text format, prints the id
 send() {
@@ -120,6 +129,7 @@ send() {
 signals() {
     awk '/^signal/ { if (line) print line; match($0, /member=[A-Za-z]+/); line = substr($0, RSTART + 7, RLENGTH - 7); next }
          /^ +(uint32|string)/ { $1 = ""; line = line $0 }
+         /^ +variant +(uint32|string)/ { $1 = ""; $2 = ""; line = line " " $0 }
          END { if (line) print line }' "$work/signals"
 }
 click() {
