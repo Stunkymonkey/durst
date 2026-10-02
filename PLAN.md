@@ -448,7 +448,17 @@ them without running the rules again. Not done: per-rule `anchor`/`output`
   `pw-play`; decided in this milestone).
 - `default_action` / `auto_invoke`.
 
-### M4 – Environment awareness
+### M4 – Environment awareness ✅ done 2026-10-02
+
+Outcome: as planned. durst has a second Wayland connection on its own thread
+(`wayland.rs`) for ext-idle-notify-v1, wlr-foreign-toplevel-management and
+output names (wl_output v4); the idle threshold change restarts it. Idle or
+locked pauses all timers; the fullscreen policy reuses the "held" state of
+M3 (`delay` holds arrivals until fullscreen ends, `pushback` also hides shown
+ones). Lock state: logind's `session/auto` resolves to the real session path
+first, because `PropertiesChanged` is only sent under that path. Tests use a
+fake logind (`tools/fake-logind`) and a real fullscreen foot window; the
+harness supports several headless outputs (`# outputs: N`).
 - Idle pause, fullscreen policy, lock detection (4.7).
 - `output = "all"`: enumerate outputs on our own Wayland connection.
 

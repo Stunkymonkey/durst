@@ -886,6 +886,9 @@ dependencies = [
  "serde",
  "tokio",
  "toml 1.1.6+spec-1.1.0",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
  "zbus",
 ]
 
@@ -1061,6 +1064,14 @@ dependencies = [
  "rayon-core",
  "smallvec",
  "zune-inflate",
+]
+
+[[package]]
+name = "fake-logind"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "zbus",
 ]
 
 [[package]]

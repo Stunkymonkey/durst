@@ -24,6 +24,12 @@
 #                       boxes[I][KEY] (x, y, w, h, bottom, right)
 #   pixel X Y           "R G B" of the last screenshot (snap or final)
 #   durstctl ...        the CLI built next to durst
+#   state KEY           a field of `durstctl info --json` (idle, locked, ...)
+#   lock / unlock       lock state of the fake logind durst watches
+#   fullscreen_window   open a black window and make it fullscreen;
+#   leave_fullscreen    and close it again (it would disturb measurements)
+# A line `# outputs: N` in the scenario gives sway N outputs side by side
+# (HEADLESS-1, HEADLESS-2, ...); screenshots then cover all of them.
 #   status CMD...       run CMD (stderr dropped) and print its exit code;
 #                       scenarios run with `set -e`, so use this for
 #                       commands that are expected to fail
@@ -40,6 +46,8 @@ scenario="$(realpath "$1")"
 out="$(realpath -m "${2:-$root/target/visual/$(basename "$scenario" .sh).png}")"
 mkdir -p "$(dirname "$out")"
 res="${RESOLUTION:-1280x720}"
+outputs="$(sed -nE 's/^# outputs: *([0-9]+).*/\1/p' "$scenario" | head -1)"
+outputs="${outputs:-1}"
 
 if [[ -z "${DURST_VISUAL_ISOLATED:-}" ]]; then
     # re-exec inside a private session bus
@@ -57,8 +65,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cat >"$work/sway.conf" <<EOF
-output HEADLESS-1 resolution $res
+for i in $(seq "$outputs"); do
+    echo "output HEADLESS-$i resolution $res position $(( (i - 1) * ${res%x*} )) 0" >>"$work/sway.conf"
+done
+cat >>"$work/sway.conf" <<EOF
 default_border none
 xwayland disable
 exec sh -c 'printf "%s\n%s\n" "\$WAYLAND_DISPLAY" "\$SWAYSOCK" > $work/env'
@@ -70,7 +80,7 @@ unset WAYLAND_DISPLAY DISPLAY SWAYSOCK
 # (sway, grim) break with its older libwayland
 durst_ld="${LD_LIBRARY_PATH:-}"
 unset LD_LIBRARY_PATH
-WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 \
+WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS="$outputs" WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 \
     sway -c "$work/sway.conf" >"$log/sway.log" 2>&1 &
 
 for _ in $(seq 50); do [[ -s "$work/env" ]] && break; sleep 0.1; done
@@ -82,7 +92,7 @@ export SWAYSOCK="$(sed -n 2p "$work/env")"
 # whole run, created before durst so its seat already has a pointer
 mkfifo "$work/pointer"
 LD_LIBRARY_PATH="$durst_ld" "${VPOINTER_BIN:-$root/target/debug/vpointer}" \
-    "${res%x*}" "${res#*x}" <"$work/pointer" >"$log/vpointer.log" 2>&1 &
+    "$(( ${res%x*} * outputs ))" "${res#*x}" <"$work/pointer" >"$log/vpointer.log" 2>&1 &
 exec 3>"$work/pointer"
 wait_for() {
     for _ in $(seq 30); do "$@" >/dev/null 2>&1 && return 0; sleep 0.1; done
@@ -90,6 +100,14 @@ wait_for() {
 }
 wait_for sh -c "swaymsg -t get_seats -r | grep -q '\"capabilities\": [1-9]'" \
     || { echo "virtual pointer missing, see $log/vpointer.log" >&2; KEEP_LOGS=1; exit 1; }
+
+# a fake logind on the private bus: durst never sees the real lock state
+mkfifo "$work/logind"
+LD_LIBRARY_PATH="$durst_ld" "$root/target/debug/fake-logind" <"$work/logind" >"$log/logind.log" 2>&1 &
+exec 4>"$work/logind"
+wait_for busctl --user status org.freedesktop.login1 \
+    || { echo "fake logind missing, see $log/logind.log" >&2; KEEP_LOGS=1; exit 1; }
+export DURST_LOGIND_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"
 
 dbus-monitor --session "type='signal',interface='org.freedesktop.Notifications'" \
     "type='signal',path='/org/durst_notification/Durst'" \
@@ -144,11 +162,33 @@ scroll() {
     printf 'scroll %s\n' "$1" >&3
     sleep 0.2
 }
+screenshot() {
+    if [[ $outputs == 1 ]]; then grim -o HEADLESS-1 "$1"; else grim "$1"; fi
+}
+state() {
+    durstctl info --json | python3 -c "import json,sys; print(json.load(sys.stdin)[sys.argv[1]])" "$1"
+}
+lock() { echo lock >&4; sleep 0.3; }
+unlock() { echo unlock >&4; sleep 0.3; }
+fullscreen_window() {
+    swaymsg -q exec "foot --app-id durst-test -o colors.background=000000 \
+        -o colors.foreground=000000 -o cursor.color='000000 000000' sleep 600"
+    wait_for sh -c "swaymsg -t get_tree | grep -q '\"app_id\": \"durst-test\"'"
+    swaymsg -q '[app_id=durst-test] fullscreen enable'
+    sleep 0.5
+}
+leave_fullscreen() {
+    swaymsg -q '[app_id=durst-test] fullscreen disable'
+    sleep 0.3
+    # gone, so it doesn't disturb the screenshot
+    swaymsg -q '[app_id=durst-test] kill'
+    sleep 0.5
+}
 last_png=""
 snap() {
     sleep 0.3
     last_png="$work/snap.png"
-    grim -o HEADLESS-1 "$last_png"
+    screenshot "$last_png"
     python3 "$here/measure.py" "$last_png" >"$work/snap.json"
 }
 geom() {
@@ -175,7 +215,7 @@ EOF
 source "$scenario"
 
 sleep "${SETTLE:-1}"
-grim -o HEADLESS-1 "$out"
+screenshot "$out"
 last_png="$out"
 export MEASURE="${out%.png}.json"
 python3 "$here/measure.py" "$out" >"$MEASURE"

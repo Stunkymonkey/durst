@@ -57,6 +57,27 @@ pub enum IconPosition {
     Off,
 }
 
+/// What happens while a fullscreen window has the focus.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Fullscreen {
+    /// show it anyway
+    #[default]
+    Show,
+    /// hold back notifications arriving during fullscreen until it ends
+    Delay,
+    /// hold back while fullscreen, even ones already shown
+    Pushback,
+}
+
+/// The state the rules can match on, besides the notification itself.
+#[derive(Debug, Clone, Default)]
+pub struct Context {
+    pub modes: BTreeSet<String>,
+    /// a focused window is fullscreen
+    pub fullscreen: bool,
+}
+
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ScriptOn {
@@ -98,6 +119,8 @@ pub struct Rule {
     mode: Option<String>,
     /// the mode is not active
     not_mode: Option<String>,
+    /// a focused window is fullscreen
+    fullscreen_active: Option<bool>,
 
     // content; templates may use {app_name} {summary} {body} {category} {urgency}
     set_summary: Option<String>,
@@ -119,6 +142,8 @@ pub struct Rule {
     timeout: Option<Timeout>,
 
     // visibility
+    /// show | delay | pushback while a fullscreen window has the focus
+    fullscreen: Option<Fullscreen>,
     /// straight into the history, never shown
     skip_display: Option<bool>,
     history_ignore: Option<bool>,
@@ -154,6 +179,7 @@ pub struct Outcome {
     pub skip_display: bool,
     pub history_ignore: bool,
     pub defer: bool,
+    pub fullscreen: Fullscreen,
     pub default_action: Option<String>,
     pub auto_invoke: Option<String>,
     pub scripts: Vec<(ScriptOn, Vec<String>)>,
@@ -167,7 +193,8 @@ impl Rule {
         self.mode.iter().chain(&self.not_mode).map(String::as_str)
     }
 
-    fn matches(&self, n: &Notification, modes: &BTreeSet<String>) -> bool {
+    fn matches(&self, n: &Notification, ctx: &Context) -> bool {
+        let modes = &ctx.modes;
         fn text(p: &Option<Pattern>, not: &Option<Pattern>, value: &str) -> bool {
             p.as_ref().is_none_or(|p| p.is_match(value))
                 && not.as_ref().is_none_or(|p| !p.is_match(value))
@@ -191,6 +218,7 @@ impl Rule {
             && self.has_actions.is_none_or(|a| n.actions.is_empty() != a)
             && self.mode.as_ref().is_none_or(|m| modes.contains(m))
             && self.not_mode.as_ref().is_none_or(|m| !modes.contains(m))
+            && self.fullscreen_active.is_none_or(|f| ctx.fullscreen == f)
     }
 
     fn apply(&self, n: &mut Notification, out: &mut Outcome) {
@@ -234,6 +262,9 @@ impl Rule {
         flag(&mut out.skip_display, self.skip_display);
         flag(&mut out.history_ignore, self.history_ignore);
         flag(&mut out.defer, self.defer);
+        if let Some(f) = self.fullscreen {
+            out.fullscreen = f;
+        }
         set(&mut out.default_action, &self.default_action);
         set(&mut out.auto_invoke, &self.auto_invoke);
         if let Some(cmd) = self.script.clone().filter(|c| !c.is_empty()) {
@@ -267,10 +298,10 @@ fn expand(template: &str, n: &Notification) -> String {
 }
 
 /// Applies all matching rules to `n` and returns what they decided.
-pub fn apply(rules: &[Rule], n: &mut Notification, modes: &BTreeSet<String>) -> Outcome {
+pub fn apply(rules: &[Rule], n: &mut Notification, ctx: &Context) -> Outcome {
     let mut out = Outcome::default();
     for (i, rule) in rules.iter().enumerate() {
-        if rule.matches(n, modes) {
+        if rule.matches(n, ctx) {
             out.matched
                 .push(rule.name.clone().unwrap_or_else(|| format!("#{}", i + 1)));
             rule.apply(n, &mut out);
@@ -292,8 +323,26 @@ mod tests {
         toml::from_str::<R>(toml).unwrap().rule
     }
 
-    fn modes(m: &[&str]) -> BTreeSet<String> {
-        m.iter().map(|s| s.to_string()).collect()
+    fn modes(m: &[&str]) -> Context {
+        Context {
+            modes: m.iter().map(|s| s.to_string()).collect(),
+            fullscreen: false,
+        }
+    }
+
+    #[test]
+    fn fullscreen_matcher_and_policy() {
+        let r = rules("[[rule]]\nfullscreen_active = true\nfullscreen = \"delay\"");
+        let mut ctx = modes(&[]);
+        assert_eq!(
+            apply(&r, &mut test_notification(1), &ctx).fullscreen,
+            Fullscreen::Show
+        );
+        ctx.fullscreen = true;
+        assert_eq!(
+            apply(&r, &mut test_notification(1), &ctx).fullscreen,
+            Fullscreen::Delay
+        );
     }
 
     #[test]

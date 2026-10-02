@@ -23,15 +23,17 @@ use crate::config::{self, Anchor, Config, MouseAction, Output, Style};
 use crate::core::history::History;
 use crate::core::layout::Margin;
 use crate::core::notification::{Notification, Urgency};
-use crate::core::rules::{self, IconPosition, Outcome, ScriptOn};
+use crate::core::rules::{self, Context, Fullscreen, IconPosition, Outcome, ScriptOn};
 use crate::core::store::{Insert, Store};
 use crate::dbus::control::{self, Command, ModeChange, Reply, Status, emit_status_changed};
 use crate::dbus::notifications::{emit_action_invoked, emit_closed};
 use crate::dbus::{self, Event};
 use crate::effects;
+use crate::logind;
 use crate::ui::icons::{self, Icon};
 use crate::ui::markup::{self, Run};
 use crate::ui::notification::{self as ui, Content};
+use crate::wayland;
 
 const NAMESPACE: &str = "durst";
 /// how often expiry is checked while a notification has a running timer
@@ -45,6 +47,8 @@ pub enum Message {
     /// the surface exists now; changes sent before this are lost
     Opened(window::Id),
     Tick(Instant),
+    Wayland(wayland::Event),
+    Locked(bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -53,6 +57,9 @@ enum Key {
     /// the "+N more" indicator after the stack
     More,
 }
+
+/// One surface of a [`Key`]; with `output = "all"` there is one per output.
+type SurfaceKey = (Key, Option<String>);
 
 /// A layer surface and the size and margin last sent for it.
 ///
@@ -73,6 +80,8 @@ struct Prepared {
     raw: Notification,
     /// false for notifications popped from the history: shown as they were
     rules: bool,
+    /// arrived during fullscreen with `fullscreen = "delay"`: held until it ends
+    delayed: bool,
     outcome: Outcome,
     style: Style,
     body: Vec<Run>,
@@ -93,12 +102,18 @@ pub struct App {
     store: Store,
     history: History,
     modes: BTreeSet<String>,
+    /// no input for `idle_threshold`
+    idle: bool,
+    locked: bool,
+    /// a focused window is fullscreen
+    fullscreen: bool,
+    outputs: Vec<String>,
     conn: Option<Connection>,
     /// state shared with the control interface, and the last published one
     status: Option<Arc<Mutex<Status>>>,
     published: Status,
     prepared: HashMap<u32, Prepared>,
-    surfaces: HashMap<Key, Surface>,
+    surfaces: HashMap<SurfaceKey, Surface>,
     windows: HashMap<window::Id, Key>,
     /// surfaces closed before they were opened, removed once they are
     orphans: HashSet<window::Id>,
@@ -135,6 +150,10 @@ impl App {
             source,
             store: Store::default(),
             modes: BTreeSet::new(),
+            idle: false,
+            locked: false,
+            fullscreen: false,
+            outputs: Vec::new(),
             conn: None,
             status: None,
             published: Status::default(),
@@ -148,11 +167,14 @@ impl App {
     fn subscription(&self) -> Subscription<Message> {
         let dbus = Subscription::run(dbus_stream).map(Message::Dbus);
         let opened = window::open_events().map(Message::Opened);
+        let wayland =
+            wayland::subscription(self.config.general.idle_threshold.0).map(Message::Wayland);
+        let locked = logind::subscription().map(Message::Locked);
         let tick = self
             .store
             .next_deadline()
             .map(|_| iced::time::every(TICK).map(Message::Tick));
-        Subscription::batch([dbus, opened].into_iter().chain(tick))
+        Subscription::batch([dbus, opened, wayland, locked].into_iter().chain(tick))
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -193,8 +215,29 @@ impl App {
                 }
                 Task::none()
             }
+            Message::Wayland(wayland::Event::Idle(idle)) => {
+                log::debug!("idle: {idle}");
+                self.idle = idle;
+                Task::none()
+            }
+            Message::Wayland(wayland::Event::Fullscreen(fullscreen)) => {
+                log::debug!("fullscreen: {fullscreen}");
+                self.fullscreen = fullscreen;
+                self.reevaluate()
+            }
+            Message::Wayland(wayland::Event::Outputs(outputs)) => {
+                log::debug!("outputs: {outputs:?}");
+                self.outputs = outputs;
+                Task::none()
+            }
+            Message::Locked(locked) => {
+                log::debug!("locked: {locked}");
+                self.locked = locked;
+                Task::none()
+            }
             Message::Tick(now) => {
-                self.store.update_timers(&self.config.general, now);
+                self.store
+                    .update_timers(&self.config.general, now, self.idle || self.locked);
                 let expired = self.store.expired(now);
                 Task::batch(
                     expired
@@ -235,8 +278,10 @@ impl App {
         if !outcome.matched.is_empty() {
             log::debug!("notification {id}: rules {:?}", outcome.matched);
         }
+        let delayed = self.fullscreen && outcome.fullscreen == Fullscreen::Delay;
+        let held = self.held(&outcome, delayed);
         // arrival side effects, but not for held ones (quiet during e.g. dnd)
-        if apply_rules && !outcome.defer {
+        if apply_rules && !held {
             self.play_sound(&n, &outcome);
             run_scripts(&outcome, &n, ScriptOn::Receive, None);
         }
@@ -259,18 +304,25 @@ impl App {
                 self.config.general.ignore_dbus_timeout,
             ),
         };
-        let held = outcome.defer;
         let auto_invoke = outcome.auto_invoke.clone();
-        let prepared = self.prepare(raw, &n, outcome, apply_rules);
+        let prepared = self.prepare(raw, &n, outcome, apply_rules, delayed);
 
         let mut tasks = Vec::new();
         match self.store.insert(n, 0, timeout, held, &self.config.general) {
             Insert::Added | Insert::Replaced => {}
             Insert::Superseded(old) => {
                 // keep the surface, it now shows the new notification
-                if let Some(surface) = self.surfaces.remove(&Key::Notification(old)) {
+                let moved: Vec<SurfaceKey> = self
+                    .surfaces
+                    .keys()
+                    .filter(|(key, _)| *key == Key::Notification(old))
+                    .cloned()
+                    .collect();
+                for skey in moved {
+                    let surface = self.surfaces.remove(&skey).expect("listed");
                     self.windows.insert(surface.window, Key::Notification(id));
-                    self.surfaces.insert(Key::Notification(id), surface);
+                    self.surfaces
+                        .insert((Key::Notification(id), skey.1), surface);
                 }
                 self.prepared.remove(&old);
                 tasks.push(self.emit_closed(old, CloseReason::Undefined));
@@ -287,7 +339,7 @@ impl App {
         self.store.set_height(id, height);
         self.prepared.insert(id, prepared);
 
-        if let Some(key) = auto_invoke.filter(|_| apply_rules) {
+        if let Some(key) = auto_invoke.filter(|_| apply_rules && !held) {
             if self.has_action(id, &key) {
                 tasks.push(self.invoke(id, &key));
                 tasks.push(self.close_after_action(id));
@@ -301,11 +353,20 @@ impl App {
     fn apply_rules(&self, raw: &Notification, apply: bool) -> (Notification, Outcome) {
         let mut n = raw.clone();
         let outcome = if apply {
-            rules::apply(&self.config.rules, &mut n, &self.modes)
+            let ctx = Context {
+                modes: self.modes.clone(),
+                fullscreen: self.fullscreen,
+            };
+            rules::apply(&self.config.rules, &mut n, &ctx)
         } else {
             Outcome::default()
         };
         (n, outcome)
+    }
+
+    /// Held back: by `defer`, or by the fullscreen policy.
+    fn held(&self, outcome: &Outcome, delayed: bool) -> bool {
+        outcome.defer || delayed || (self.fullscreen && outcome.fullscreen == Fullscreen::Pushback)
     }
 
     /// Style, body and icon of a notification as the rules left it.
@@ -315,6 +376,7 @@ impl App {
         n: &Notification,
         outcome: Outcome,
         rules: bool,
+        delayed: bool,
     ) -> Prepared {
         let urgency = n.hints.urgency;
         let style = self
@@ -335,6 +397,7 @@ impl App {
         Prepared {
             raw,
             rules,
+            delayed,
             body: markup::parse(&n.body),
             icon,
             style,
@@ -357,8 +420,10 @@ impl App {
                 tasks.push(self.close(id, CloseReason::Undefined));
                 continue;
             }
-            let held = outcome.defer;
-            let prepared = self.prepare(old.raw, &n, outcome, old.rules);
+            // delayed ones are released when fullscreen ends
+            let delayed = old.delayed && self.fullscreen;
+            let held = self.held(&outcome, delayed);
+            let prepared = self.prepare(old.raw, &n, outcome, old.rules, delayed);
             let count = self.store.get(id).map_or(1, |e| e.count);
             let height = ui::height(
                 &content(&n, count, &prepared),
@@ -542,7 +607,8 @@ impl App {
     /// Opens, moves, resizes and closes surfaces to match the store.
     fn sync(&mut self, now: Instant) -> Task<Message> {
         let general = &self.config.general.clone();
-        self.store.update_timers(general, now);
+        self.store
+            .update_timers(general, now, self.idle || self.locked);
 
         let mut wanted: Vec<(Key, u32)> = self
             .store
@@ -558,19 +624,33 @@ impl App {
 
         let mut tasks = Vec::new();
         let was_empty = self.surfaces.is_empty();
-        let gone: Vec<Key> = self
+        // the outputs each key is shown on
+        let outputs: Vec<Option<String>> = match &general.output {
+            Output::All => self.outputs.iter().cloned().map(Some).collect(),
+            _ => vec![None],
+        };
+        let wanted: Vec<(SurfaceKey, u32, Margin)> = wanted
+            .into_iter()
+            .zip(margins)
+            .flat_map(|((key, height), margin)| {
+                outputs
+                    .iter()
+                    .map(move |output| ((key, output.clone()), height, margin))
+            })
+            .collect();
+        let gone: Vec<SurfaceKey> = self
             .surfaces
             .keys()
-            .filter(|key| !wanted.iter().any(|(k, _)| k == *key))
-            .copied()
+            .filter(|skey| !wanted.iter().any(|(k, _, _)| k == *skey))
+            .cloned()
             .collect();
-        for key in gone {
-            tasks.push(self.remove_surface(key));
+        for skey in gone {
+            tasks.push(self.remove_surface(&skey));
         }
 
-        for ((key, height), margin) in wanted.into_iter().zip(margins) {
+        for (skey, height, margin) in wanted {
             let size = (general.width, height);
-            match self.surfaces.get_mut(&key) {
+            match self.surfaces.get_mut(&skey) {
                 // changes wait until the surface exists
                 Some(surface) if !surface.opened => {}
                 Some(surface) => {
@@ -597,16 +677,18 @@ impl App {
                         exclusive_zone: None,
                         margin: Some(margin),
                         keyboard_interactivity: KeyboardInteractivity::None,
-                        output_option: match &general.output {
-                            Output::Focused => OutputOption::LastOutput,
-                            Output::Name(name) => OutputOption::OutputName(name.clone()),
+                        output_option: match (&general.output, &skey.1) {
+                            (_, Some(name)) | (Output::Name(name), None) => {
+                                OutputOption::OutputName(name.clone())
+                            }
+                            _ => OutputOption::LastOutput,
                         },
                         events_transparent: false,
                         namespace: Some(NAMESPACE.to_string()),
                     });
-                    self.windows.insert(window, key);
+                    self.windows.insert(window, skey.0);
                     self.surfaces.insert(
-                        key,
+                        skey,
                         Surface {
                             window,
                             opened: false,
@@ -748,6 +830,10 @@ impl App {
                     held: status.held,
                     history: status.history,
                     modes: status.modes,
+                    idle: self.idle,
+                    locked: self.locked,
+                    fullscreen: self.fullscreen,
+                    outputs: self.outputs.clone(),
                 };
                 (Reply::Info(info), Task::none())
             }
@@ -791,16 +877,16 @@ impl App {
         self.config = config;
         self.history.set_capacity(self.config.history.length);
         let reevaluate = self.reevaluate();
-        let keys: Vec<Key> = self.surfaces.keys().copied().collect();
+        let keys: Vec<SurfaceKey> = self.surfaces.keys().cloned().collect();
         Task::batch(
-            keys.into_iter()
+            keys.iter()
                 .map(|key| self.remove_surface(key))
                 .chain([reevaluate]),
         )
     }
 
-    fn remove_surface(&mut self, key: Key) -> Task<Message> {
-        let Some(surface) = self.surfaces.remove(&key) else {
+    fn remove_surface(&mut self, key: &SurfaceKey) -> Task<Message> {
+        let Some(surface) = self.surfaces.remove(key) else {
             return Task::none();
         };
         self.windows.remove(&surface.window);

@@ -103,6 +103,8 @@ pub struct General {
     pub icon_theme: Option<String>,
     /// use the urgency's timeout even if the sender asks for another one
     pub ignore_dbus_timeout: bool,
+    /// timeouts pause after this long without input; 0 = never
+    pub idle_threshold: Timeout,
 }
 
 impl Default for General {
@@ -120,6 +122,7 @@ impl Default for General {
             browser: vec!["xdg-open".into()],
             icon_theme: None,
             ignore_dbus_timeout: false,
+            idle_threshold: Timeout(Some(Duration::from_secs(120))),
         }
     }
 }
@@ -180,12 +183,14 @@ impl Anchor {
     }
 }
 
-/// `"focused"` or `"name:<output>"`.
+/// `"focused"`, `"all"` or `"name:<output>"`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output {
     /// the output with keyboard focus when the first notification appears;
     /// the stack stays there until it is empty
     Focused,
+    /// every notification on every output
+    All,
     Name(String),
 }
 
@@ -194,10 +199,11 @@ impl<'de> Deserialize<'de> for Output {
         let s = String::deserialize(d)?;
         match s.as_str() {
             "focused" => Ok(Output::Focused),
+            "all" => Ok(Output::All),
             _ => match s.strip_prefix("name:") {
                 Some(name) if !name.is_empty() => Ok(Output::Name(name.to_owned())),
                 _ => Err(de::Error::custom(format!(
-                    "invalid output {s:?}, expected \"focused\" or \"name:<output>\""
+                    "invalid output {s:?}, expected \"focused\", \"all\" or \"name:<output>\""
                 ))),
             },
         }
@@ -579,7 +585,11 @@ mod tests {
         let c = parse("[general]\noutput = \"name:DP-1\"").unwrap();
         assert_eq!(c.general.output, Output::Name("DP-1".into()));
         assert!(parse("[general]\noutput = \"name:\"").is_err());
-        assert!(parse("[general]\noutput = \"all\"").is_err());
+        assert_eq!(
+            parse("[general]\noutput = \"all\"").unwrap().general.output,
+            Output::All
+        );
+        assert!(parse("[general]\noutput = \"left\"").is_err());
     }
 
     #[test]
