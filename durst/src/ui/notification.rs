@@ -20,13 +20,13 @@ use super::markup::Run;
 use crate::config::Style;
 use crate::core::notification::Notification;
 
-const SHAPING: Shaping = Shaping::Advanced;
+pub(super) const SHAPING: Shaping = Shaping::Advanced;
 const WRAPPING: Wrapping = Wrapping::WordOrGlyph;
-const SUMMARY_FONT: Font = Font {
+pub(super) const SUMMARY_FONT: Font = Font {
     weight: font::Weight::Bold,
     ..Font::DEFAULT
 };
-const BODY_FONT: Font = Font::DEFAULT;
+pub(super) const BODY_FONT: Font = Font::DEFAULT;
 
 /// What a notification surface reports back.
 #[derive(Debug, Clone)]
@@ -70,7 +70,7 @@ impl<'a> Content<'a> {
 
 /// Inner padding; iced draws borders on top of the content, so the border
 /// width is added to keep content off the border.
-fn inset(style: &Style) -> u32 {
+pub(super) fn inset(style: &Style) -> u32 {
     style.padding + style.border.width
 }
 
@@ -104,7 +104,14 @@ fn layout<T>(
 }
 
 /// Height of plain text; `width = INFINITY` means a single line.
-fn text_height(content: &str, font: Font, style: &Style, width: f32) -> f32 {
+/// Width of a single line of text.
+pub(super) fn line_width(content: &str, font: Font, style: &Style) -> f32 {
+    Paragraph::with_text(layout(content, font, style, f32::INFINITY, Wrapping::None))
+        .min_bounds()
+        .width
+}
+
+pub(super) fn text_height(content: &str, font: Font, style: &Style, width: f32) -> f32 {
     let wrapping = if width.is_finite() {
         WRAPPING
     } else {
@@ -285,7 +292,11 @@ pub fn view<'a>(c: Content<'a>, style: &'a Style) -> Element<'a, Event> {
 }
 
 /// The surface's box: background, border and padding.
-fn frame<'a>(content: Element<'a, Event>, style: &Style, padding: u32) -> Element<'a, Event> {
+pub(super) fn frame<'a, E: 'a>(
+    content: Element<'a, E>,
+    style: &Style,
+    padding: u32,
+) -> Element<'a, E> {
     let style = style.clone();
     container(content)
         .padding(padding as f32)

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use durst_proto::control::DaemonInfo;
+use durst_proto::control::{DaemonInfo, VolumeInfo};
 use durst_proto::notifications::CloseReason;
 use iced::widget::text;
 use iced::{Color, Element, Subscription, Task, mouse, window};
@@ -19,7 +19,8 @@ use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
 use iced_layershell::to_layer_message;
 use zbus::Connection;
 
-use crate::config::{self, Anchor, Config, MouseAction, Output, Style};
+use crate::audio::{self, Target, Volume};
+use crate::config::{self, Anchor, Config, General, MouseAction, Output, Style};
 use crate::config_watch;
 use crate::core::history::History;
 use crate::core::layout::Margin;
@@ -34,11 +35,14 @@ use crate::logind;
 use crate::ui::icons::{self, Icon};
 use crate::ui::markup::{self, Run};
 use crate::ui::notification::{self as ui, Content};
+use crate::ui::osd;
 use crate::wayland;
 
 const NAMESPACE: &str = "durst";
 /// how often expiry is checked while a notification has a running timer
 const TICK: Duration = Duration::from_millis(100);
+/// at most this often a dragged volume slider sets the volume
+const SLIDER_RATE: Duration = Duration::from_millis(30);
 
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
@@ -52,6 +56,10 @@ pub enum Message {
     Locked(bool),
     /// the config file changed on disk
     ConfigChanged,
+    Audio(audio::Event),
+    Osd(osd::Event),
+    /// send the volume of a dragged slider
+    FlushVolume,
     ConfigError(String),
 }
 
@@ -60,6 +68,8 @@ enum Key {
     Notification(u32),
     /// the "+N more" indicator after the stack
     More,
+    /// the volume OSD, separate from the stack
+    VolumeOsd,
 }
 
 /// One surface of a [`Key`]; with `output = "all"` there is one per output.
@@ -92,6 +102,19 @@ struct Prepared {
     icon: Option<Icon>,
 }
 
+/// The volume OSD while it is shown.
+struct VolumeOsd {
+    target: Target,
+    /// hidden after this, unless hovered or dragged; `None`: stays
+    until: Option<Instant>,
+    hovered: bool,
+    /// the slider is dragged to this percent
+    drag: Option<u32>,
+    /// dragged to, not sent yet
+    pending: Option<u32>,
+    last_sent: Option<Instant>,
+}
+
 /// Where the config comes from, for reloading.
 #[derive(Debug, Clone)]
 pub struct ConfigSource {
@@ -120,6 +143,9 @@ pub struct App {
     /// a focused window is fullscreen
     fullscreen: bool,
     outputs: Vec<String>,
+    audio: Option<audio::Handle>,
+    volumes: HashMap<Target, Option<Volume>>,
+    osd: Option<VolumeOsd>,
     conn: Option<Connection>,
     /// state shared with the control interface, and the last published one
     status: Option<Arc<Mutex<Status>>>,
@@ -172,6 +198,9 @@ impl App {
             locked: false,
             fullscreen: false,
             outputs: Vec::new(),
+            audio: None,
+            volumes: HashMap::new(),
+            osd: None,
             conn: None,
             status: None,
             published: Status::default(),
@@ -190,14 +219,19 @@ impl App {
         let locked = logind::subscription().map(Message::Locked);
         let config =
             config_watch::subscription(self.source.path.clone()).map(|()| Message::ConfigChanged);
-        let tick = self
-            .store
-            .next_deadline()
-            .map(|_| iced::time::every(TICK).map(Message::Tick));
+        let audio = audio::subscription().map(Message::Audio);
+        let tick = (self.store.next_deadline().is_some() || self.osd.is_some())
+            .then(|| iced::time::every(TICK).map(Message::Tick));
+        let flush = self
+            .osd
+            .as_ref()
+            .and_then(|o| o.pending)
+            .map(|_| iced::time::every(SLIDER_RATE).map(|_| Message::FlushVolume));
         Subscription::batch(
-            [dbus, opened, wayland, locked, config]
+            [dbus, opened, wayland, locked, config, audio]
                 .into_iter()
-                .chain(tick),
+                .chain(tick)
+                .chain(flush),
         )
     }
 
@@ -264,7 +298,39 @@ impl App {
                 self.locked = locked;
                 Task::none()
             }
+            Message::Audio(audio::Event::Ready(handle)) => {
+                log::info!("volume control connected to PipeWire");
+                self.audio = Some(handle);
+                Task::none()
+            }
+            Message::Audio(audio::Event::Changed(target, volume)) => {
+                log::debug!("volume {target:?}: {volume:?}");
+                let previous = self.volumes.insert(target, volume.clone());
+                // a change of the same device, not the first value or a switch
+                let changed = match (previous.flatten(), &volume) {
+                    (Some(old), Some(new)) => old.description == new.description && old != *new,
+                    _ => false,
+                };
+                if changed && self.config.osd.volume.show_on_external_change {
+                    self.show_osd(target);
+                }
+                Task::none()
+            }
+            Message::Osd(event) => {
+                self.osd_event(event);
+                Task::none()
+            }
+            Message::FlushVolume => {
+                self.flush_volume(true);
+                Task::none()
+            }
             Message::Tick(now) => {
+                let hide = self.osd.as_ref().is_some_and(|o| {
+                    !o.hovered && o.drag.is_none() && o.until.is_some_and(|t| t <= now)
+                });
+                if hide {
+                    self.osd = None;
+                }
                 self.store
                     .update_timers(&self.config.general, now, self.idle || self.locked);
                 let expired = self.store.expired(now);
@@ -294,6 +360,13 @@ impl App {
                 self.store.waiting(&self.config.general),
                 self.config.style(Urgency::Normal),
             ),
+            Some(Key::VolumeOsd) => {
+                let Some(content) = self.osd_content() else {
+                    return text("").into();
+                };
+                return osd::volume_view(content, self.config.style(Urgency::Normal))
+                    .map(Message::Osd);
+            }
             None => return text("").into(),
         };
         element.map(move |event| Message::Surface(window, event))
@@ -658,27 +731,41 @@ impl App {
             Output::All => self.outputs.iter().cloned().map(Some).collect(),
             _ => vec![None],
         };
-        let wanted: Vec<(SurfaceKey, u32, Margin)> = wanted
+        let mut placed: Vec<(Key, (u32, u32), Margin, Anchor)> = wanted
             .into_iter()
             .zip(margins)
-            .flat_map(|((key, height), margin)| {
+            .map(|((key, height), margin)| (key, (general.width, height), margin, general.anchor))
+            .collect();
+        if let Some(content) = self.osd_content() {
+            let osd = &self.config.osd.volume;
+            let height = osd::volume_height(&content, self.config.style(Urgency::Normal));
+            let place = General {
+                anchor: osd.anchor,
+                offset: osd.offset,
+                ..general.clone()
+            };
+            let margin = crate::core::layout::stack_margins(&place, &[height])[0];
+            placed.push((Key::VolumeOsd, (osd.width, height), margin, osd.anchor));
+        }
+        let wanted: Vec<(SurfaceKey, (u32, u32), Margin, Anchor)> = placed
+            .into_iter()
+            .flat_map(|(key, size, margin, anchor)| {
                 outputs
                     .iter()
-                    .map(move |output| ((key, output.clone()), height, margin))
+                    .map(move |output| ((key, output.clone()), size, margin, anchor))
             })
             .collect();
         let gone: Vec<SurfaceKey> = self
             .surfaces
             .keys()
-            .filter(|skey| !wanted.iter().any(|(k, _, _)| k == *skey))
+            .filter(|skey| !wanted.iter().any(|(k, ..)| k == *skey))
             .cloned()
             .collect();
         for skey in gone {
             tasks.push(self.remove_surface(&skey));
         }
 
-        for (skey, height, margin) in wanted {
-            let size = (general.width, height);
+        for (skey, size, margin, anchor) in wanted {
             match self.surfaces.get_mut(&skey) {
                 // changes wait until the surface exists
                 Some(surface) if !surface.opened => {}
@@ -702,7 +789,7 @@ impl App {
                     let (window, open) = Message::layershell_open(NewLayerShellSettings {
                         size: Some(size),
                         layer: Layer::Overlay,
-                        anchor: layer_anchor(general.anchor),
+                        anchor: layer_anchor(anchor),
                         exclusive_zone: None,
                         margin: Some(margin),
                         keyboard_interactivity: KeyboardInteractivity::None,
@@ -882,6 +969,59 @@ impl App {
                 let task = self.reevaluate();
                 (Reply::Modes(self.modes.iter().cloned().collect()), task)
             }
+            Command::Volume(mic) => match self.volume_info(mic) {
+                Ok(info) => (Reply::Volume(info), Task::none()),
+                Err(reply) => (reply, Task::none()),
+            },
+            Command::SetVolume(mic, change) => {
+                let mut info = match self.volume_info(mic) {
+                    Ok(info) => info,
+                    Err(reply) => return (reply, Task::none()),
+                };
+                let step = self.config.osd.volume.step as i64;
+                let current = info.percent as i64;
+                let change = change.trim().trim_end_matches('%');
+                let percent = match change {
+                    "up" => Some(current + step),
+                    "down" => Some(current - step),
+                    c if c.starts_with(['+', '-']) => c.parse::<i64>().ok().map(|d| current + d),
+                    c => c.parse::<i64>().ok(),
+                };
+                let Some(percent) = percent else {
+                    let msg = format!("invalid volume {change:?}: N, +N, -N, up or down");
+                    return (Reply::InvalidArgument(msg), Task::none());
+                };
+                let target = target(mic);
+                info.percent = self.set_volume(target, percent);
+                self.show_osd(target);
+                (Reply::Volume(info), Task::none())
+            }
+            Command::SetMute(mic, state) => {
+                let mut info = match self.volume_info(mic) {
+                    Ok(info) => info,
+                    Err(reply) => return (reply, Task::none()),
+                };
+                info.muted = match state.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    "toggle" => !info.muted,
+                    _ => {
+                        let msg = format!("invalid mute state {state:?}: on, off or toggle");
+                        return (Reply::InvalidArgument(msg), Task::none());
+                    }
+                };
+                let target = target(mic);
+                self.send_audio(audio::Command::SetMute(target, info.muted));
+                self.show_osd(target);
+                (Reply::Volume(info), Task::none())
+            }
+            Command::ShowVolumeOsd(mic) => match self.volume_info(mic) {
+                Ok(_) => {
+                    self.show_osd(target(mic));
+                    (Reply::Done, Task::none())
+                }
+                Err(reply) => (reply, Task::none()),
+            },
             Command::KnownModes => {
                 let known: BTreeSet<String> = self
                     .config
@@ -892,6 +1032,128 @@ impl App {
                     .collect();
                 (Reply::Modes(known.into_iter().collect()), Task::none())
             }
+        }
+    }
+
+    fn volume_info(&self, mic: bool) -> Result<VolumeInfo, Reply> {
+        let name = if mic { "source" } else { "sink" };
+        if self.audio.is_none() {
+            return Err(Reply::NotFound("no connection to PipeWire".into()));
+        }
+        match self.volumes.get(&target(mic)).cloned().flatten() {
+            Some(v) => Ok(VolumeInfo {
+                percent: v.percent,
+                muted: v.muted,
+                description: v.description,
+            }),
+            None => Err(Reply::NotFound(format!("no default {name}"))),
+        }
+    }
+
+    fn osd_content(&self) -> Option<osd::VolumeContent<'_>> {
+        let state = self.osd.as_ref()?;
+        let volume = self.volumes.get(&state.target)?.as_ref()?;
+        Some(osd::VolumeContent {
+            title: &volume.description,
+            percent: state.drag.unwrap_or(volume.percent),
+            muted: volume.muted,
+            max: self.config.osd.volume.max_volume,
+        })
+    }
+
+    fn show_osd(&mut self, target: Target) {
+        let config = &self.config.osd.volume;
+        if !config.enabled {
+            return;
+        }
+        let until = config.timeout.0.map(|t| Instant::now() + t);
+        match &mut self.osd {
+            Some(osd) if osd.target == target => osd.until = until,
+            _ => {
+                self.osd = Some(VolumeOsd {
+                    target,
+                    until,
+                    hovered: false,
+                    drag: None,
+                    pending: None,
+                    last_sent: None,
+                })
+            }
+        }
+    }
+
+    fn osd_event(&mut self, event: osd::Event) {
+        let Some(target) = self.osd.as_ref().map(|o| o.target) else {
+            return;
+        };
+        match event {
+            osd::Event::Slide(value) => {
+                if let Some(osd) = &mut self.osd {
+                    osd.drag = Some(value.round() as u32);
+                    osd.pending = osd.drag;
+                }
+                self.flush_volume(false);
+            }
+            osd::Event::Release => {
+                self.flush_volume(true);
+                if let Some(osd) = &mut self.osd {
+                    osd.drag = None;
+                }
+                self.show_osd(target);
+            }
+            osd::Event::Scroll(y) => {
+                let step = self.config.osd.volume.step as i64;
+                let delta = if y > 0.0 { step } else { -step };
+                if let Some(current) = self.volumes.get(&target).cloned().flatten() {
+                    self.set_volume(target, current.percent as i64 + delta);
+                }
+                self.show_osd(target);
+            }
+            osd::Event::ToggleMute => {
+                if let Some(current) = self.volumes.get(&target).cloned().flatten() {
+                    self.send_audio(audio::Command::SetMute(target, !current.muted));
+                }
+                self.show_osd(target);
+            }
+            osd::Event::Hover(hovered) => {
+                if let Some(osd) = &mut self.osd {
+                    osd.hovered = hovered;
+                }
+                if !hovered {
+                    // the timeout starts again when the pointer leaves
+                    self.show_osd(target);
+                }
+            }
+        }
+    }
+
+    /// Sends the dragged volume, unless one was sent less than
+    /// `SLIDER_RATE` ago (and `force` isn't set): dragging produces far more
+    /// values than PipeWire needs.
+    fn flush_volume(&mut self, force: bool) {
+        let now = Instant::now();
+        let Some(osd) = &mut self.osd else { return };
+        let Some(percent) = osd.pending else { return };
+        if !force && osd.last_sent.is_some_and(|t| now - t < SLIDER_RATE) {
+            return;
+        }
+        osd.pending = None;
+        osd.last_sent = Some(now);
+        let target = osd.target;
+        self.set_volume(target, percent as i64);
+    }
+
+    /// Sets the volume, limited to 0..=max_volume; returns the new percent.
+    fn set_volume(&mut self, target: Target, percent: i64) -> u32 {
+        let percent = percent.clamp(0, self.config.osd.volume.max_volume as i64) as u32;
+        self.send_audio(audio::Command::SetPercent(target, percent));
+        percent
+    }
+
+    fn send_audio(&self, command: audio::Command) {
+        match &self.audio {
+            Some(audio) => audio.send(command),
+            None => log::warn!("no PipeWire connection for {command:?}"),
         }
     }
 
@@ -982,6 +1244,10 @@ impl App {
             Task::none()
         }
     }
+}
+
+fn target(mic: bool) -> Target {
+    if mic { Target::Source } else { Target::Sink }
 }
 
 fn content<'a>(n: &'a Notification, count: u32, p: &'a Prepared) -> Content<'a> {

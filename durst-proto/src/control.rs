@@ -14,6 +14,8 @@ pub mod error {
     pub const NOT_FOUND: &str = "org.durst_notification.Error.NotFound";
     /// the config file could not be loaded; the old config stays active
     pub const INVALID_CONFIG: &str = "org.durst_notification.Error.InvalidConfig";
+    /// an argument has the wrong form, e.g. a volume of "loud"
+    pub const INVALID_ARGUMENT: &str = "org.durst_notification.Error.InvalidArgument";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -51,6 +53,16 @@ pub struct DaemonInfo {
     /// a focused window is fullscreen
     pub fullscreen: bool,
     pub outputs: Vec<String>,
+}
+
+/// Volume of the default sink or source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct VolumeInfo {
+    /// cubic scale like pavucontrol and wpctl; may exceed 100
+    pub percent: u32,
+    pub muted: bool,
+    /// the device, e.g. "Built-in Audio Analog Stereo"
+    pub description: String,
 }
 
 #[zbus::proxy(
@@ -95,6 +107,19 @@ pub trait Durst {
 
     /// the modes used by any rule, active or not
     fn known_modes(&self) -> zbus::Result<Vec<String>>;
+
+    /// the volume of the default sink, or of the default source if `mic`
+    fn volume(&self, mic: bool) -> zbus::Result<VolumeInfo>;
+
+    /// `change`: "50" sets, "+5" / "-5" changes (a trailing "%" is allowed),
+    /// "up" / "down" change by the configured step; shows the OSD and
+    /// returns the new volume (as sent, before PipeWire applied it)
+    fn set_volume(&self, mic: bool, change: &str) -> zbus::Result<VolumeInfo>;
+
+    /// `state`: "on", "off" or "toggle"; shows the OSD
+    fn set_mute(&self, mic: bool, state: &str) -> zbus::Result<VolumeInfo>;
+
+    fn show_volume_osd(&self, mic: bool) -> zbus::Result<()>;
 
     #[zbus(property)]
     fn active_modes(&self) -> zbus::Result<Vec<String>>;

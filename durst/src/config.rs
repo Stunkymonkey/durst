@@ -15,6 +15,7 @@ pub struct Config {
     pub mouse: Mouse,
     pub urgency: Urgencies,
     pub sound: Sound,
+    pub osd: Osd,
     pub rules: Vec<Rule>,
     /// the base style with each urgency's overrides applied, see [`Config::style`]
     styles: [Style; 3],
@@ -57,6 +58,7 @@ struct RawConfig {
     style: toml::Table,
     urgency: RawUrgencies,
     sound: Sound,
+    osd: Osd,
     rule: Vec<Rule>,
 }
 
@@ -123,6 +125,47 @@ impl Default for General {
             icon_theme: None,
             ignore_dbus_timeout: false,
             idle_threshold: Timeout(Some(Duration::from_secs(120))),
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct Osd {
+    pub volume: VolumeOsd,
+}
+
+/// The on-screen display for speaker and microphone volume; it uses the
+/// normal urgency's style, the slider the progress colors.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub struct VolumeOsd {
+    pub enabled: bool,
+    pub anchor: Anchor,
+    /// distance from the anchored screen edges: [x, y]
+    pub offset: [i32; 2],
+    pub width: u32,
+    /// hidden after this long, unless the pointer is over it
+    pub timeout: Timeout,
+    /// percent per scroll step and for `durstctl volume up/down`
+    pub step: u32,
+    /// the slider's maximum in percent; above 100 amplifies
+    pub max_volume: u32,
+    /// also show it when another program changes the volume
+    pub show_on_external_change: bool,
+}
+
+impl Default for VolumeOsd {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            anchor: Anchor::Bottom,
+            offset: [0, 80],
+            width: 360,
+            timeout: Timeout(Some(Duration::from_secs(2))),
+            step: 5,
+            max_volume: 100,
+            show_on_external_change: true,
         }
     }
 }
@@ -527,6 +570,7 @@ pub fn parse(s: &str) -> Result<Config, String> {
             critical: timeout(2),
         },
         sound: raw.sound,
+        osd: raw.osd,
         rules: raw.rule,
         styles: styles.try_into().unwrap(),
         style_tables: style_tables.try_into().unwrap(),
