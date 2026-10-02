@@ -91,6 +91,17 @@ max_volume = 100
 # also show it when another program changes the volume
 show_on_external_change = true
 
+[osd.media]
+# on-screen display for the media player (MPRIS): cover, title, artist, buttons
+enabled = true
+anchor = "top"
+offset = [0, 20]
+width = 420
+cover_size = 72
+timeout = "4s"
+# show it when the playing track changes
+show_on_track_change = true
+
 # Rules are applied in order to every notification; each sees the result of
 # the earlier ones. All matchers given must match; text matchers are regexes
 # searched anywhere (anchor them with ^...$).

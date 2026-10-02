@@ -498,7 +498,18 @@ back with `pw-dump`. Node info updates only carry what changed: applying
 them unconditionally lost the node's name after every volume change.
 - PipeWire backend (4.8), volume OSD UI, `durstctl volume`, `osd show volume|mic`.
 
-### M7 – Media OSD
+### M7 – Media OSD ✅ done 2026-10-02
+
+Outcome: MPRIS client on its own session bus connection (`mpris.rs`):
+players are found at startup and through `NameOwnerChanged`, their
+`PlaybackStatus` and `Metadata` followed with abortable streams. The active
+player is a pure rule in `core/media.rs`. The OSD shows on a change of the
+active song, not when a player repeats its metadata (e.g. once more with the
+cover) and not for the players found at startup. Covers: `file://` and
+`http(s)://` (ureq with rustls, 5 s timeout, 10 MB limit), loaded off the
+UI loop and scaled once; the cover square, and the buttons (one width for
+all labels) keep their size, so nothing moves. Not done: player selection
+(not chosen in the planning) and seeking.
 - MPRIS watcher and active-player logic (4.9), media OSD UI, `durstctl media`.
 
 ### M8 – Polish

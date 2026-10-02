@@ -2,6 +2,7 @@
 
 pub mod history;
 pub mod layout;
+pub mod media;
 pub mod notification;
 pub mod rules;
 pub mod store;
