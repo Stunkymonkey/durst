@@ -447,17 +447,45 @@ pub fn default_path() -> PathBuf {
     config_home.join("durst/config.toml")
 }
 
-/// Loads the config. A missing file at the default location yields the
-/// defaults; every other problem is an error.
-pub fn load(path: &Path, explicit: bool) -> Result<Config, String> {
+/// Reads the config file; `None` if it doesn't exist and wasn't given
+/// explicitly, then the defaults apply.
+pub fn read(path: &Path, explicit: bool) -> Result<Option<String>, String> {
     match std::fs::read_to_string(path) {
-        Ok(s) => parse(&s).map_err(|e| format!("{}: {e}", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => {
-            log::info!("no config at {}, using defaults", path.display());
-            Ok(Config::default())
-        }
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => Ok(None),
         Err(e) => Err(format!("{}: {e}", path.display())),
     }
+}
+
+/// Loads the config and returns it with the text it came from. A missing
+/// file at the default location yields the defaults; every other problem is
+/// an error.
+pub fn load(path: &Path, explicit: bool) -> Result<(Config, Option<String>), String> {
+    let text = read(path, explicit)?;
+    let config = match &text {
+        Some(s) => parse(s).map_err(|e| format!("{}: {e}", path.display()))?,
+        None => {
+            log::info!("no config at {}, using defaults", path.display());
+            Config::default()
+        }
+    };
+    Ok((config, text))
+}
+
+/// A TOML error without the source excerpt (`2 | width = ...` and the
+/// `^^^` markers), which only lines up in a monospace terminal.
+pub fn short_error(error: &str) -> String {
+    let excerpt = |line: &str| {
+        let t = line.trim_start();
+        t.starts_with('|')
+            || t.split_once(" |")
+                .is_some_and(|(n, _)| n.parse::<u32>().is_ok())
+    };
+    error
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !excerpt(l))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub fn parse(s: &str) -> Result<Config, String> {
@@ -537,6 +565,15 @@ mod tests {
         let err = parse("[general]\nwidht = 3\n").unwrap_err();
         assert!(err.contains("widht"), "{err}");
         assert!(err.contains("line 2"), "{err}");
+    }
+
+    #[test]
+    fn short_errors_drop_the_excerpt() {
+        let err = parse("[general]\nwidth = \"wide\"\n").unwrap_err();
+        assert_eq!(
+            short_error(&err),
+            "TOML parse error at line 2, column 9\ninvalid type: string \"wide\", expected u32"
+        );
     }
 
     #[test]
