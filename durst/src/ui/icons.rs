@@ -36,18 +36,7 @@ pub fn resolve(n: &Notification, size: u32, theme: Option<&str>) -> Option<Icon>
     .flatten()
     .filter(|s| !s.is_empty())
     .find_map(|s| lookup(s, size, theme))
-    .and_then(|path| {
-        if path.extension().is_some_and(|e| e == "svg") {
-            return Some(Icon::Svg(path));
-        }
-        match ::image::open(&path) {
-            Ok(img) => Some(Icon::Raster(scaled(img.into_rgba8(), size))),
-            Err(e) => {
-                log::warn!("cannot load icon {}: {e}", path.display());
-                None
-            }
-        }
-    })
+    .and_then(|path| load(path, size))
 }
 
 /// Scales an image to fit `size` x `size`, keeping its aspect ratio.
@@ -75,6 +64,24 @@ fn scaled(img: RgbaImage, size: u32) -> Handle {
         imageops::resize(&img, sw, sh, filter)
     };
     Handle::from_rgba(sw, sh, img.into_raw())
+}
+
+/// An icon by name or path, e.g. a rule's `default_icon`.
+pub fn resolve_name(name: &str, size: u32, theme: Option<&str>) -> Option<Icon> {
+    lookup(name, size, theme).and_then(|path| load(path, size))
+}
+
+fn load(path: PathBuf, size: u32) -> Option<Icon> {
+    if path.extension().is_some_and(|e| e == "svg") {
+        return Some(Icon::Svg(path));
+    }
+    match ::image::open(&path) {
+        Ok(img) => Some(Icon::Raster(scaled(img.into_rgba8(), size))),
+        Err(e) => {
+            log::warn!("cannot load icon {}: {e}", path.display());
+            None
+        }
+    }
 }
 
 fn lookup(name: &str, size: u32, theme: Option<&str>) -> Option<PathBuf> {

@@ -29,7 +29,7 @@ pub struct NotificationInfo {
     pub actions: Vec<(String, String)>,
     /// unix time in seconds
     pub received: u64,
-    /// "displayed", "waiting" or "history"
+    /// "displayed", "waiting", "held" (by a rule) or "history"
     pub state: String,
 }
 
@@ -40,7 +40,10 @@ pub struct DaemonInfo {
     pub config_path: String,
     pub displayed: u32,
     pub waiting: u32,
+    /// held back by rules, e.g. while do-not-disturb is active
+    pub held: u32,
     pub history: u32,
+    pub modes: Vec<String>,
 }
 
 #[zbus::proxy(
@@ -74,11 +77,29 @@ pub trait Durst {
 
     fn info(&self) -> zbus::Result<DaemonInfo>;
 
+    /// replaces the active modes, returns them
+    fn set_modes(&self, modes: &[&str]) -> zbus::Result<Vec<String>>;
+
+    fn enable_mode(&self, mode: &str) -> zbus::Result<Vec<String>>;
+
+    fn disable_mode(&self, mode: &str) -> zbus::Result<Vec<String>>;
+
+    fn toggle_mode(&self, mode: &str) -> zbus::Result<Vec<String>>;
+
+    /// the modes used by any rule, active or not
+    fn known_modes(&self) -> zbus::Result<Vec<String>>;
+
+    #[zbus(property)]
+    fn active_modes(&self) -> zbus::Result<Vec<String>>;
+
     #[zbus(property)]
     fn displayed_count(&self) -> zbus::Result<u32>;
 
     #[zbus(property)]
     fn waiting_count(&self) -> zbus::Result<u32>;
+
+    #[zbus(property)]
+    fn held_count(&self) -> zbus::Result<u32>;
 
     #[zbus(property)]
     fn history_count(&self) -> zbus::Result<u32>;

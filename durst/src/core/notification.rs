@@ -91,6 +91,9 @@ pub struct Hints {
     pub value: Option<i32>,
     /// x-dunst-stack-tag / x-canonical-private-synchronous
     pub stack_tag: Option<String>,
+    pub sound_file: Option<String>,
+    pub sound_name: Option<String>,
+    pub suppress_sound: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,8 +114,10 @@ pub struct Notification {
 
 impl Notification {
     /// How long the notification stays visible, `None` = until closed.
-    pub fn timeout(&self, urgencies: &Urgencies) -> Option<Duration> {
+    /// `ignore_dbus` uses the urgency's timeout even if the sender sets one.
+    pub fn timeout(&self, urgencies: &Urgencies, ignore_dbus: bool) -> Option<Duration> {
         match self.expire_timeout {
+            _ if ignore_dbus => urgencies.get(self.hints.urgency).timeout.0,
             0 => None,
             ms if ms > 0 => Some(Duration::from_millis(ms as u64)),
             _ => urgencies.get(self.hints.urgency).timeout.0,
@@ -166,15 +171,20 @@ mod tests {
     fn timeout_follows_dbus_then_urgency() {
         let urgencies = crate::config::Config::default().urgency;
         let mut n = test_notification(1);
-        assert_eq!(n.timeout(&urgencies), Some(Duration::from_secs(10)));
+        assert_eq!(n.timeout(&urgencies, false), Some(Duration::from_secs(10)));
         n.hints.urgency = Urgency::Low;
-        assert_eq!(n.timeout(&urgencies), Some(Duration::from_secs(5)));
+        assert_eq!(n.timeout(&urgencies, false), Some(Duration::from_secs(5)));
         n.hints.urgency = Urgency::Critical;
-        assert_eq!(n.timeout(&urgencies), None);
+        assert_eq!(n.timeout(&urgencies, false), None);
         n.expire_timeout = 1500;
-        assert_eq!(n.timeout(&urgencies), Some(Duration::from_millis(1500)));
+        assert_eq!(
+            n.timeout(&urgencies, false),
+            Some(Duration::from_millis(1500))
+        );
         n.expire_timeout = 0;
-        assert_eq!(n.timeout(&urgencies), None);
+        assert_eq!(n.timeout(&urgencies, false), None);
+        n.hints.urgency = Urgency::Low;
+        assert_eq!(n.timeout(&urgencies, true), Some(Duration::from_secs(5)));
     }
 
     #[test]

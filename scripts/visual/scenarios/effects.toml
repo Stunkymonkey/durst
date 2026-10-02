@@ -1,0 +1,28 @@
+[sound]
+command = ["sh", "-c", "echo \"$1\" >> \"$DURST_TEST_DIR/sounds\"", "sh"]
+
+[[rule]]
+summary = "^Scripted$"
+script = ["sh", "-c", "env | grep ^DURST_ | sort > \"$DURST_TEST_DIR/receive.env\""]
+
+[[rule]]
+summary = "^Scripted$"
+script = ["sh", "-c", "echo \"$DURST_CLOSE_REASON\" >> \"$DURST_TEST_DIR/close\""]
+script_on = "close"
+
+[[rule]]
+summary = "^Scripted$"
+script = ["sh", "-c", "echo \"$DURST_ACTION\" >> \"$DURST_TEST_DIR/action\""]
+script_on = "action"
+
+[[rule]]
+summary = "^Ruled sound$"
+sound = "/dev/null"
+
+[[rule]]
+summary = "^Muted$"
+mute_sound = true
+
+[[rule]]
+mode = "dnd"
+defer = true

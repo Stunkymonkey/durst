@@ -45,6 +45,8 @@ pub struct Content<'a> {
     pub count: u32,
     pub body: &'a [Run],
     pub icon: Option<&'a Icon>,
+    /// icon after the text instead of before it
+    pub icon_right: bool,
 }
 
 impl<'a> Content<'a> {
@@ -252,17 +254,21 @@ pub fn view<'a>(c: Content<'a>, style: &'a Style) -> Element<'a, Event> {
         texts = texts.push(row(actions).spacing(style.spacing));
     }
 
-    let mut content = row![].spacing(style.spacing);
-    if let Some(icon) = c.icon {
+    let icon = c.icon.map(|icon| {
         let size = Length::Fixed(style.icon_size as f32);
-        content = content.push(match icon {
+        match icon {
             Icon::Svg(path) => {
                 Element::from(svg(svg::Handle::from_path(path)).width(size).height(size))
             }
             Icon::Raster(handle) => image(handle.clone()).width(size).height(size).into(),
-        });
+        }
+    });
+    let content = match (icon, c.icon_right) {
+        (None, _) => row![texts],
+        (Some(icon), false) => row![icon, texts],
+        (Some(icon), true) => row![texts, icon],
     }
-    content = content.push(texts);
+    .spacing(style.spacing);
 
     mouse_area(frame(content.into(), style, inset(style)))
         .on_press(Event::Press(mouse::Button::Left))

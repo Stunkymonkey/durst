@@ -23,6 +23,8 @@ output = "focused"
 browser = ["xdg-open"]
 # icon theme for icon names; default: gtk-icon-theme-name from GTK's settings.ini
 # icon_theme = "Adwaita"
+# use the urgency's timeout even if the sender asks for another one
+ignore_dbus_timeout = false
 
 [history]
 # how many closed notifications are kept for `durstctl history`, 0 = none
@@ -63,3 +65,49 @@ timeout = "10s"
 [urgency.critical]
 timeout = 0
 style = { border.color = "#f38ba8" }
+
+[sound]
+# plays a sound file, the path is appended
+command = ["pw-play"]
+# sound theme for sound names (freedesktop sound theme spec)
+theme = "freedesktop"
+# play the sound-file / sound-name hints sent by applications
+play_hints = true
+
+# Rules are applied in order to every notification; each sees the result of
+# the earlier ones. All matchers given must match; text matchers are regexes
+# searched anywhere (anchor them with ^...$).
+#
+# matchers: app_name summary body icon category desktop_entry stack_tag
+#           (each also as not_<name>), urgency, not_urgency, transient,
+#           has_actions, mode, not_mode
+# content:  set_summary set_body (templates with {app_name} {summary} {body}
+#           {category} {urgency}), hide_body, set_urgency, set_category,
+#           set_stack_tag, set_icon, set_transient
+# display:  style (like [style]), default_icon, icon_position (left|right|off),
+#           timeout
+# routing:  skip_display (history only), history_ignore, defer (hold back)
+# actions:  default_action (for do_action), auto_invoke
+# effects:  script (command list, DURST_* env vars) with script_on
+#           (receive|action|close), sound (file or theme name), mute_sound
+#
+# Modes are switched with `durstctl mode enable|disable|toggle <name>`.
+
+# do not disturb: hold everything but critical notifications back
+[[rule]]
+name = "dnd"
+mode = "dnd"
+not_urgency = "critical"
+defer = true
+
+# no message contents on screen
+# [[rule]]
+# app_name = "^(Signal|Element)$"
+# hide_body = true
+# sound = "message-new-instant"
+
+# keep the volume slider notifications of scripts out of the history
+# [[rule]]
+# stack_tag = "^volume$"
+# history_ignore = true
+# timeout = "1s"

@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use durst_proto::control::{DurstProxy, NotificationInfo, error};
 
-use cli::{Cli, Cmd, HistoryCmd, NotifCmd};
+use cli::{Cli, Cmd, HistoryCmd, ModeCmd, NotifCmd};
 
 /// Exit codes, see the help text in cli.rs.
 const NOT_RUNNING: u8 = 1;
@@ -48,11 +48,13 @@ async fn run(command: Cmd) -> zbus::Result<()> {
     let durst = DurstProxy::new(&conn).await?;
     match command {
         Cmd::Notif(NotifCmd::List { json }) => print_list(&durst.list().await?, json),
-        Cmd::Notif(NotifCmd::Count { waiting: false }) => {
-            println!("{}", durst.displayed_count().await?)
-        }
-        Cmd::Notif(NotifCmd::Count { waiting: true }) => {
-            println!("{}", durst.waiting_count().await?)
+        Cmd::Notif(NotifCmd::Count { waiting, held }) => {
+            let count = match (waiting, held) {
+                (true, _) => durst.waiting_count().await?,
+                (_, true) => durst.held_count().await?,
+                _ => durst.displayed_count().await?,
+            };
+            println!("{count}")
         }
         Cmd::Notif(NotifCmd::Close { id }) => durst.close(id.unwrap_or(0)).await?,
         Cmd::Notif(NotifCmd::CloseAll) => durst.close_all().await?,
@@ -63,6 +65,30 @@ async fn run(command: Cmd) -> zbus::Result<()> {
         Cmd::History(HistoryCmd::Pop) => println!("{}", durst.history_pop().await?),
         Cmd::History(HistoryCmd::Clear) => durst.history_clear().await?,
         Cmd::History(HistoryCmd::Count) => println!("{}", durst.history_count().await?),
+        Cmd::Mode(ModeCmd::List { all: false }) => print_modes(&durst.active_modes().await?),
+        Cmd::Mode(ModeCmd::List { all: true }) => {
+            let active = durst.active_modes().await?;
+            let mut known = durst.known_modes().await?;
+            known.extend(
+                active
+                    .iter()
+                    .filter(|m| !known.contains(m))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            );
+            known.sort();
+            for mode in known {
+                let mark = if active.contains(&mode) { "*" } else { " " };
+                println!("{mark} {mode}");
+            }
+        }
+        Cmd::Mode(ModeCmd::Set { modes }) => {
+            let modes: Vec<&str> = modes.iter().map(String::as_str).collect();
+            print_modes(&durst.set_modes(&modes).await?)
+        }
+        Cmd::Mode(ModeCmd::Enable { mode }) => print_modes(&durst.enable_mode(&mode).await?),
+        Cmd::Mode(ModeCmd::Disable { mode }) => print_modes(&durst.disable_mode(&mode).await?),
+        Cmd::Mode(ModeCmd::Toggle { mode }) => print_modes(&durst.toggle_mode(&mode).await?),
         Cmd::Reload => durst.reload().await?,
         Cmd::Info { json } => {
             let info = durst.info().await?;
@@ -73,11 +99,19 @@ async fn run(command: Cmd) -> zbus::Result<()> {
                 println!("config:    {}", info.config_path);
                 println!("displayed: {}", info.displayed);
                 println!("waiting:   {}", info.waiting);
+                println!("held:      {}", info.held);
                 println!("history:   {}", info.history);
+                println!("modes:     {}", info.modes.join(" "));
             }
         }
     }
     Ok(())
+}
+
+fn print_modes(modes: &[String]) {
+    for mode in modes {
+        println!("{mode}");
+    }
 }
 
 fn print_list(list: &[NotificationInfo], json: bool) {

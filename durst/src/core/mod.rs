@@ -3,4 +3,5 @@
 pub mod history;
 pub mod layout;
 pub mod notification;
+pub mod rules;
 pub mod store;

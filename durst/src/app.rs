@@ -2,7 +2,7 @@
 //! changes of the [`Store`]. After every event, [`App::sync`] reconciles the
 //! open surfaces with the store.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -19,15 +19,17 @@ use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
 use iced_layershell::to_layer_message;
 use zbus::Connection;
 
-use crate::config::{self, Anchor, Config, MouseAction, Output};
+use crate::config::{self, Anchor, Config, MouseAction, Output, Style};
 use crate::core::history::History;
 use crate::core::layout::Margin;
 use crate::core::notification::{Notification, Urgency};
+use crate::core::rules::{self, IconPosition, Outcome, ScriptOn};
 use crate::core::store::{Insert, Store};
-use crate::dbus::control::{self, Command, Reply, Status, emit_status_changed};
+use crate::dbus::control::{self, Command, ModeChange, Reply, Status, emit_status_changed};
 use crate::dbus::notifications::{emit_action_invoked, emit_closed};
 use crate::dbus::{self, Event};
-use crate::ui::icons::Icon;
+use crate::effects;
+use crate::ui::icons::{self, Icon};
 use crate::ui::markup::{self, Run};
 use crate::ui::notification::{self as ui, Content};
 
@@ -64,8 +66,15 @@ struct Surface {
     margin: Margin,
 }
 
-/// Parsed content of a notification, prepared once instead of every frame.
-struct Rendered {
+/// A notification as received, what the rules made of it, and its parsed
+/// content, prepared once instead of every frame.
+struct Prepared {
+    /// as sent, before the rules; they run again when modes change
+    raw: Notification,
+    /// false for notifications popped from the history: shown as they were
+    rules: bool,
+    outcome: Outcome,
+    style: Style,
     body: Vec<Run>,
     icon: Option<Icon>,
 }
@@ -83,11 +92,12 @@ pub struct App {
     source: ConfigSource,
     store: Store,
     history: History,
+    modes: BTreeSet<String>,
     conn: Option<Connection>,
-    /// counts shared with the control interface, and the last published ones
+    /// state shared with the control interface, and the last published one
     status: Option<Arc<Mutex<Status>>>,
     published: Status,
-    rendered: HashMap<u32, Rendered>,
+    prepared: HashMap<u32, Prepared>,
     surfaces: HashMap<Key, Surface>,
     windows: HashMap<window::Id, Key>,
     /// surfaces closed before they were opened, removed once they are
@@ -124,10 +134,11 @@ impl App {
             config,
             source,
             store: Store::default(),
+            modes: BTreeSet::new(),
             conn: None,
             status: None,
             published: Status::default(),
-            rendered: HashMap::new(),
+            prepared: HashMap::new(),
             surfaces: HashMap::new(),
             windows: HashMap::new(),
             orphans: HashSet::new(),
@@ -167,7 +178,7 @@ impl App {
                 log::error!("{e}");
                 std::process::exit(1);
             }
-            Message::Dbus(Event::Notify(n)) => self.notify(*n),
+            Message::Dbus(Event::Notify(n)) => self.receive(*n, true),
             Message::Dbus(Event::Close(id)) => self.close(id, CloseReason::Closed),
             Message::Surface(window, event) => match self.windows.get(&window) {
                 Some(&Key::Notification(id)) => self.surface_event(id, event),
@@ -198,17 +209,14 @@ impl App {
     fn view(&self, window: window::Id) -> Element<'_, Message> {
         let element = match self.windows.get(&window) {
             Some(Key::Notification(id)) => {
-                let (Some(entry), Some(rendered)) = (self.store.get(*id), self.rendered.get(id))
+                let (Some(entry), Some(prepared)) = (self.store.get(*id), self.prepared.get(id))
                 else {
                     return text("").into();
                 };
-                let content = Content {
-                    notification: &entry.notification,
-                    count: entry.count,
-                    body: &rendered.body,
-                    icon: rendered.icon.as_ref(),
-                };
-                ui::view(content, self.config.style(entry.notification.hints.urgency))
+                ui::view(
+                    content(&entry.notification, entry.count, prepared),
+                    &prepared.style,
+                )
             }
             Some(Key::More) => ui::more_view(
                 self.store.waiting(&self.config.general),
@@ -219,21 +227,44 @@ impl App {
         element.map(move |event| Message::Surface(window, event))
     }
 
-    fn notify(&mut self, n: Notification) -> Task<Message> {
-        let style = self.config.style(n.hints.urgency);
-        let rendered = Rendered {
-            body: markup::parse(&n.body),
-            icon: crate::ui::icons::resolve(
-                &n,
-                style.icon_size,
-                self.config.general.icon_theme.as_deref(),
+    /// A notification arrived (or came back from the history, then without
+    /// rules and side effects).
+    fn receive(&mut self, raw: Notification, apply_rules: bool) -> Task<Message> {
+        let (n, outcome) = self.apply_rules(&raw, apply_rules);
+        let id = n.id;
+        if !outcome.matched.is_empty() {
+            log::debug!("notification {id}: rules {:?}", outcome.matched);
+        }
+        // arrival side effects, but not for held ones (quiet during e.g. dnd)
+        if apply_rules && !outcome.defer {
+            self.play_sound(&n, &outcome);
+            run_scripts(&outcome, &n, ScriptOn::Receive, None);
+        }
+
+        if outcome.skip_display {
+            // replaces a displayed one: that one is gone now
+            if self.store.remove(id).is_some() {
+                self.prepared.remove(&id);
+            }
+            if !outcome.history_ignore {
+                self.history.push(n);
+            }
+            return self.emit_closed(id, CloseReason::Undefined);
+        }
+
+        let timeout = match outcome.timeout {
+            Some(timeout) => timeout.0,
+            None => n.timeout(
+                &self.config.urgency,
+                self.config.general.ignore_dbus_timeout,
             ),
         };
-        let timeout = n.timeout(&self.config.urgency);
-        let id = n.id;
+        let held = outcome.defer;
+        let auto_invoke = outcome.auto_invoke.clone();
+        let prepared = self.prepare(raw, &n, outcome, apply_rules);
 
-        let mut task = Task::none();
-        match self.store.insert(n, 0, timeout, &self.config.general) {
+        let mut tasks = Vec::new();
+        match self.store.insert(n, 0, timeout, held, &self.config.general) {
             Insert::Added | Insert::Replaced => {}
             Insert::Superseded(old) => {
                 // keep the surface, it now shows the new notification
@@ -241,23 +272,104 @@ impl App {
                     self.windows.insert(surface.window, Key::Notification(id));
                     self.surfaces.insert(Key::Notification(id), surface);
                 }
-                self.rendered.remove(&old);
-                task = self.emit_closed(old, CloseReason::Undefined);
+                self.prepared.remove(&old);
+                tasks.push(self.emit_closed(old, CloseReason::Undefined));
             }
         }
         // the height depends on the duplicate counter, known only now
         let entry = self.store.get(id).expect("just inserted");
-        let content = Content {
-            notification: &entry.notification,
-            count: entry.count,
-            body: &rendered.body,
-            icon: rendered.icon.as_ref(),
-        };
-        let height = ui::height(&content, style, self.config.general.width);
-        log::debug!("notification {id}: height {height}, timeout {timeout:?}");
+        let height = ui::height(
+            &content(&entry.notification, entry.count, &prepared),
+            &prepared.style,
+            self.config.general.width,
+        );
+        log::debug!("notification {id}: height {height}, timeout {timeout:?}, held {held}");
         self.store.set_height(id, height);
-        self.rendered.insert(id, rendered);
-        task
+        self.prepared.insert(id, prepared);
+
+        if let Some(key) = auto_invoke.filter(|_| apply_rules) {
+            if self.has_action(id, &key) {
+                tasks.push(self.invoke(id, &key));
+                tasks.push(self.close_after_action(id));
+            } else {
+                log::warn!("auto_invoke: notification {id} has no action {key:?}");
+            }
+        }
+        Task::batch(tasks)
+    }
+
+    fn apply_rules(&self, raw: &Notification, apply: bool) -> (Notification, Outcome) {
+        let mut n = raw.clone();
+        let outcome = if apply {
+            rules::apply(&self.config.rules, &mut n, &self.modes)
+        } else {
+            Outcome::default()
+        };
+        (n, outcome)
+    }
+
+    /// Style, body and icon of a notification as the rules left it.
+    fn prepare(
+        &self,
+        raw: Notification,
+        n: &Notification,
+        outcome: Outcome,
+        rules: bool,
+    ) -> Prepared {
+        let urgency = n.hints.urgency;
+        let style = self
+            .config
+            .style_with(urgency, &outcome.style)
+            .unwrap_or_else(|e| {
+                log::warn!("rule style: {e}");
+                self.config.style(urgency).clone()
+            });
+        let theme = self.config.general.icon_theme.as_deref();
+        let icon = match outcome.icon_position {
+            IconPosition::Off => None,
+            _ => icons::resolve(n, style.icon_size, theme).or_else(|| {
+                let name = outcome.default_icon.as_deref()?;
+                icons::resolve_name(name, style.icon_size, theme)
+            }),
+        };
+        Prepared {
+            raw,
+            rules,
+            body: markup::parse(&n.body),
+            icon,
+            style,
+            outcome,
+        }
+    }
+
+    /// Runs the rules of all notifications again, after the modes or the
+    /// config changed: they may be held or released, restyled, rewritten.
+    fn reevaluate(&mut self) -> Task<Message> {
+        let ids: Vec<u32> = self.store.iter().map(|e| e.notification.id).collect();
+        let mut tasks = Vec::new();
+        for id in ids {
+            let Some(old) = self.prepared.remove(&id) else {
+                continue;
+            };
+            let (n, outcome) = self.apply_rules(&old.raw, old.rules);
+            if outcome.skip_display {
+                self.prepared.insert(id, Prepared { outcome, ..old });
+                tasks.push(self.close(id, CloseReason::Undefined));
+                continue;
+            }
+            let held = outcome.defer;
+            let prepared = self.prepare(old.raw, &n, outcome, old.rules);
+            let count = self.store.get(id).map_or(1, |e| e.count);
+            let height = ui::height(
+                &content(&n, count, &prepared),
+                &prepared.style,
+                self.config.general.width,
+            );
+            self.store
+                .refresh(id, n, height, held, &self.config.general);
+            self.prepared.insert(id, prepared);
+        }
+        Task::batch(tasks)
     }
 
     fn close(&mut self, id: u32, reason: CloseReason) -> Task<Message> {
@@ -265,11 +377,20 @@ impl App {
             return Task::none();
         };
         log::debug!("close {id}: {reason:?}");
+        let prepared = self.prepared.remove(&id);
+        if let Some(p) = &prepared {
+            run_scripts(
+                &p.outcome,
+                &entry.notification,
+                ScriptOn::Close,
+                Some(reason_name(reason)),
+            );
+        }
         // the user may want these back; the sender closed the others itself
-        if matches!(reason, CloseReason::Expired | CloseReason::Dismissed) {
+        let ignore = prepared.is_some_and(|p| p.outcome.history_ignore);
+        if matches!(reason, CloseReason::Expired | CloseReason::Dismissed) && !ignore {
             self.history.push(entry.notification);
         }
-        self.rendered.remove(&id);
         self.emit_closed(id, reason)
     }
 
@@ -333,20 +454,16 @@ impl App {
                 MouseAction::CloseCurrent => tasks.push(self.close(id, CloseReason::Dismissed)),
                 MouseAction::CloseAll => tasks.push(self.close_all()),
                 MouseAction::DoAction => {
-                    let key = self
-                        .store
-                        .get(id)
-                        .and_then(|e| default_action(&e.notification));
-                    if let Some(key) = key {
+                    if let Some(key) = self.default_action(id) {
                         tasks.push(self.invoke(id, &key));
                         invoked = true;
                     }
                 }
                 MouseAction::OpenUrl => {
                     let url = self
-                        .rendered
+                        .prepared
                         .get(&id)
-                        .and_then(|r| markup::first_link(&r.body))
+                        .and_then(|p| markup::first_link(&p.body))
                         .map(str::to_owned);
                     if let Some(url) = url {
                         self.open_url(&url);
@@ -357,8 +474,28 @@ impl App {
         Task::batch(tasks)
     }
 
+    fn has_action(&self, id: u32, key: &str) -> bool {
+        self.store
+            .get(id)
+            .is_some_and(|e| e.notification.actions.iter().any(|(k, _)| k == key))
+    }
+
+    /// The action of a click: a rule's `default_action`, else "default" or
+    /// the only action there is.
+    fn default_action(&self, id: u32) -> Option<String> {
+        let from_rule = self
+            .prepared
+            .get(&id)
+            .and_then(|p| p.outcome.default_action.clone())
+            .filter(|key| self.has_action(id, key));
+        from_rule.or_else(|| default_action(&self.store.get(id)?.notification))
+    }
+
     fn invoke(&self, id: u32, key: &str) -> Task<Message> {
         log::debug!("invoke action {key:?} of {id}");
+        if let (Some(p), Some(e)) = (self.prepared.get(&id), self.store.get(id)) {
+            run_scripts(&p.outcome, &e.notification, ScriptOn::Action, Some(key));
+        }
         match self.conn.clone() {
             Some(conn) => Task::future(emit_action_invoked(conn, id, key.to_owned())).discard(),
             None => Task::none(),
@@ -374,18 +511,24 @@ impl App {
     }
 
     fn open_url(&self, url: &str) {
-        let Some((program, args)) = self.config.general.browser.split_first() else {
+        log::debug!("open {url}");
+        effects::spawn(&self.config.general.browser, &[url], &[]);
+    }
+
+    /// A rule's sound wins; otherwise the sender's sound hints, unless
+    /// suppressed. `mute_sound` silences both.
+    fn play_sound(&self, n: &Notification, outcome: &Outcome) {
+        if outcome.mute_sound {
             return;
+        }
+        let hint = || {
+            let h = &n.hints;
+            (self.config.sound.play_hints && !h.suppress_sound)
+                .then(|| h.sound_file.clone().or_else(|| h.sound_name.clone()))
+                .flatten()
         };
-        log::debug!("open {url} with {program}");
-        match std::process::Command::new(program)
-            .args(args)
-            .arg(url)
-            .spawn()
-        {
-            // reap the child so it doesn't stay a zombie
-            Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
-            Err(e) => log::warn!("cannot run {program}: {e}"),
+        if let Some(sound) = outcome.sound.clone().or_else(hint) {
+            effects::play_sound(&self.config.sound, &sound);
         }
     }
 
@@ -484,21 +627,27 @@ impl App {
         Task::batch(tasks)
     }
 
-    fn publish_status(&mut self) -> Task<Message> {
+    fn status(&self) -> Status {
         let general = &self.config.general;
-        let status = Status {
+        Status {
             displayed: self.store.visible(general).len() as u32,
             waiting: self.store.waiting(general) as u32,
+            held: self.store.held() as u32,
             history: self.history.len() as u32,
-        };
+            modes: self.modes.iter().cloned().collect(),
+        }
+    }
+
+    fn publish_status(&mut self) -> Task<Message> {
+        let status = self.status();
         let (Some(shared), Some(conn)) = (&self.status, &self.conn) else {
             return Task::none();
         };
         if status == self.published {
             return Task::none();
         }
-        *shared.lock().unwrap() = status;
-        let old = std::mem::replace(&mut self.published, status);
+        *shared.lock().unwrap() = status.clone();
+        let old = std::mem::replace(&mut self.published, status.clone());
         Task::future(emit_status_changed(conn.clone(), old, status)).discard()
     }
 
@@ -522,7 +671,11 @@ impl App {
                     .iter()
                     .enumerate()
                     .map(|(i, e)| {
-                        let state = if i < visible { "displayed" } else { "waiting" };
+                        let state = match (i < visible, e.held) {
+                            (_, true) => "held",
+                            (true, _) => "displayed",
+                            (false, _) => "waiting",
+                        };
                         control::info(&e.notification, state)
                     })
                     .collect();
@@ -538,14 +691,9 @@ impl App {
                     Ok(id) => id,
                     Err(reply) => return (reply, Task::none()),
                 };
-                let n = &self.store.get(id).expect("resolved").notification;
                 let key = match key.as_str() {
-                    "" => default_action(n),
-                    key => n
-                        .actions
-                        .iter()
-                        .any(|(k, _)| k == key)
-                        .then(|| key.to_owned()),
+                    "" => self.default_action(id),
+                    key => self.has_action(id, key).then(|| key.to_owned()),
                 };
                 match key {
                     Some(key) => {
@@ -575,7 +723,7 @@ impl App {
                     if self.config.history.sticky {
                         n.expire_timeout = 0;
                     }
-                    (Reply::Id(id), self.notify(n))
+                    (Reply::Id(id), self.receive(n, false))
                 }
                 None => (Reply::NotFound("the history is empty".into()), Task::none()),
             },
@@ -591,50 +739,64 @@ impl App {
                 }
             },
             Command::Info => {
+                let status = self.status();
                 let info = DaemonInfo {
                     version: env!("CARGO_PKG_VERSION").to_owned(),
                     config_path: self.source.path.display().to_string(),
-                    displayed: self.store.visible(general).len() as u32,
-                    waiting: self.store.waiting(general) as u32,
-                    history: self.history.len() as u32,
+                    displayed: status.displayed,
+                    waiting: status.waiting,
+                    held: status.held,
+                    history: status.history,
+                    modes: status.modes,
                 };
                 (Reply::Info(info), Task::none())
+            }
+            Command::Modes(change) => {
+                match change {
+                    ModeChange::Set(modes) => self.modes = modes.into_iter().collect(),
+                    ModeChange::Enable(mode) => {
+                        self.modes.insert(mode);
+                    }
+                    ModeChange::Disable(mode) => {
+                        self.modes.remove(&mode);
+                    }
+                    ModeChange::Toggle(mode) => {
+                        if !self.modes.remove(&mode) {
+                            self.modes.insert(mode);
+                        }
+                    }
+                }
+                log::info!("modes: {:?}", self.modes);
+                let task = self.reevaluate();
+                (Reply::Modes(self.modes.iter().cloned().collect()), task)
+            }
+            Command::KnownModes => {
+                let known: BTreeSet<String> = self
+                    .config
+                    .rules
+                    .iter()
+                    .flat_map(|r| r.modes())
+                    .map(str::to_owned)
+                    .collect();
+                (Reply::Modes(known.into_iter().collect()), Task::none())
             }
         }
     }
 
-    /// Switches to a new config: re-renders every notification (styles and
-    /// sizes may have changed) and reopens all surfaces, since anchor and
-    /// output can only be set when a surface is created.
+    /// Switches to a new config: evaluates the rules and renders every
+    /// notification again, and reopens all surfaces, since anchor and output
+    /// can only be set when a surface is created.
     fn apply_config(&mut self, config: Config) -> Task<Message> {
         log::info!("config reloaded");
         self.config = config;
         self.history.set_capacity(self.config.history.length);
-        let ids: Vec<u32> = self.store.iter().map(|e| e.notification.id).collect();
-        for id in ids {
-            let entry = self.store.get(id).expect("listed");
-            let n = &entry.notification;
-            let style = self.config.style(n.hints.urgency);
-            let rendered = Rendered {
-                body: markup::parse(&n.body),
-                icon: crate::ui::icons::resolve(
-                    n,
-                    style.icon_size,
-                    self.config.general.icon_theme.as_deref(),
-                ),
-            };
-            let content = Content {
-                notification: n,
-                count: entry.count,
-                body: &rendered.body,
-                icon: rendered.icon.as_ref(),
-            };
-            let height = ui::height(&content, style, self.config.general.width);
-            self.store.set_height(id, height);
-            self.rendered.insert(id, rendered);
-        }
+        let reevaluate = self.reevaluate();
         let keys: Vec<Key> = self.surfaces.keys().copied().collect();
-        Task::batch(keys.into_iter().map(|key| self.remove_surface(key)))
+        Task::batch(
+            keys.into_iter()
+                .map(|key| self.remove_surface(key))
+                .chain([reevaluate]),
+        )
     }
 
     fn remove_surface(&mut self, key: Key) -> Task<Message> {
@@ -649,6 +811,33 @@ impl App {
             self.orphans.insert(surface.window);
             Task::none()
         }
+    }
+}
+
+fn content<'a>(n: &'a Notification, count: u32, p: &'a Prepared) -> Content<'a> {
+    Content {
+        notification: n,
+        count,
+        body: &p.body,
+        icon: p.icon.as_ref(),
+        icon_right: p.outcome.icon_position == IconPosition::Right,
+    }
+}
+
+fn run_scripts(outcome: &Outcome, n: &Notification, on: ScriptOn, detail: Option<&str>) {
+    for (when, command) in &outcome.scripts {
+        if *when == on {
+            effects::run_script(command, n, on, detail);
+        }
+    }
+}
+
+fn reason_name(reason: CloseReason) -> &'static str {
+    match reason {
+        CloseReason::Expired => "expired",
+        CloseReason::Dismissed => "dismissed",
+        CloseReason::Closed => "closed",
+        CloseReason::Undefined => "undefined",
     }
 }
 

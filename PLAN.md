@@ -197,15 +197,18 @@ right = `close_all`.
 
 ### 4.4 Modes & DND
 
-- The daemon holds a **set** of active modes (mako-style). Only `default` is
-  built in; all others, such as `dnd`, `work` and `gaming`, are defined by the
-  user's rules.
-- Rules can match `mode = "dnd"`. The rule action `defer = true` keeps a
-  notification in the waiting queue instead of showing it.
-- Whenever the modes change, the waiting queue is re-evaluated, so turning off
-  `dnd` shows everything that was held back.
+- The daemon holds a **set** of active modes (mako-style), empty at start.
+  Modes like `dnd`, `work` or `gaming` exist only through the rules that use
+  them (`durstctl mode list --all` shows those).
+- Rules can match `mode = "dnd"` / `not_mode`. The rule action `defer = true`
+  holds a notification back: it is neither shown nor counted as waiting
+  ("held" in `durstctl notif list`), its timer doesn't run, and arrival side
+  effects (sound, scripts, auto_invoke) are skipped.
+- Whenever the modes (or the config) change, all rules run again on every
+  notification as originally received, so turning off `dnd` shows everything
+  that was held back.
 - The shipped example config contains:
-  `[[rule]] mode="dnd" urgency!="critical" → defer=true`.
+  `[[rule]] mode="dnd" not_urgency="critical" defer=true`.
 
 ### 4.5 Rules
 
@@ -428,7 +431,18 @@ into `*/scripts/` (git-ignored).
 - History ring (4.6).
 - Completions and man page.
 
-### M3 – Rules & modes
+### M3 – Rules & modes ✅ done 2026-10-02
+
+Outcome: as planned, with these decisions: content actions are prefixed
+`set_` (`set_summary`, `set_urgency`, …; the plan's `icon`/`category` would
+collide with the matchers of the same name) and `format` became
+`set_summary`/`set_body` templates; each rule sees the notification as the
+earlier rules left it. Sound playback spawns a configurable command
+(`[sound] command`, default `pw-play`) instead of linking `rodio`: no audio
+stack in the daemon, and any player works. The history keeps processed
+notifications (a `hide_body` rule also hides it there); `history pop` shows
+them without running the rules again. Not done: per-rule `anchor`/`output`
+(they would need one stack per anchor; left for later if needed).
 - Matchers and all rule actions (4.5), modes and defer (4.4), the `mode` CLI.
 - Scripts with env vars, sound playback (sound theme lookup + `rodio` or
   `pw-play`; decided in this milestone).
@@ -495,7 +509,6 @@ into `*/scripts/` (git-ignored).
 | R7 | iced_tiny_skia 0.14 misplaces scaled raster images: it truncates the position in image space, so an upscaled image moves by up to the scale factor (found by `scenarios/content.sh`). | durst scales raster icons to their display size itself (`ui::icons::scaled`). HiDPI output scaling can still shift by up to the scale factor; report upstream. |
 
 Open, to decide during implementation:
-- Sound playback library (`rodio` in-process vs. spawning `pw-play`).
 - Whether the "+N more" indicator is its own surface or part of the last
   visible notification.
 - Animations (deliberately out of scope for now).

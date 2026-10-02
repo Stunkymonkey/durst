@@ -19,6 +19,9 @@ pub enum Cmd {
     /// Closed notifications
     #[command(subcommand)]
     History(HistoryCmd),
+    /// Modes switch rules on and off, e.g. a do-not-disturb mode
+    #[command(subcommand)]
+    Mode(ModeCmd),
     /// Reload the config file; on errors the old config stays active
     Reload,
     /// Version, config path and counts
@@ -38,8 +41,11 @@ pub enum NotifCmd {
     /// Number of displayed notifications
     Count {
         /// count the waiting ones instead
-        #[arg(long)]
+        #[arg(long, conflicts_with = "held")]
         waiting: bool,
+        /// count the ones held back by rules instead
+        #[arg(long)]
+        held: bool,
     },
     /// Close a notification, by default the newest displayed one
     Close { id: Option<u32> },
@@ -53,6 +59,24 @@ pub enum NotifCmd {
         /// action key; default: the "default" action or the only one
         key: Option<String>,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ModeCmd {
+    /// Print the active modes, one per line
+    List {
+        /// all modes used by rules, active ones marked with "*"
+        #[arg(long)]
+        all: bool,
+    },
+    /// Replace the active modes (none given: deactivate all)
+    Set { modes: Vec<String> },
+    /// Activate a mode
+    Enable { mode: String },
+    /// Deactivate a mode
+    Disable { mode: String },
+    /// Activate a mode if it is inactive, deactivate it otherwise
+    Toggle { mode: String },
 }
 
 #[derive(Subcommand, Debug)]

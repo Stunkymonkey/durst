@@ -47,6 +47,8 @@ pub struct Entry {
     /// how many identical notifications this entry stands for
     pub count: u32,
     pub hovered: bool,
+    /// held back by a rule (`defer`): neither shown nor waiting
+    pub held: bool,
     /// arrival order, kept when the entry is replaced
     seq: u64,
     timer: Timer,
@@ -62,7 +64,8 @@ pub enum Insert {
     Superseded(u32),
 }
 
-/// All notifications: the first `max_visible` are shown, the rest wait.
+/// All notifications: the first `max_visible` are shown, the rest wait;
+/// held ones come last and are not counted as waiting.
 #[derive(Debug, Default)]
 pub struct Store {
     /// sorted, the entry next to the anchored screen edge first
@@ -76,6 +79,7 @@ impl Store {
         notification: Notification,
         height: u32,
         timeout: Option<Duration>,
+        held: bool,
         general: &General,
     ) -> Insert {
         let mut entry = Entry {
@@ -83,6 +87,7 @@ impl Store {
             height,
             count: 1,
             hovered: false,
+            held,
             seq: self.next_seq,
             timer: Timer::new(timeout),
         };
@@ -133,8 +138,27 @@ impl Store {
             } else {
                 Reverse(u64::MAX - e.seq)
             };
-            (urgency, seq)
+            (e.held, urgency, seq)
         });
+    }
+
+    /// Updates an entry after its rules were evaluated again (e.g. a mode
+    /// changed); keeps its place in arrival order, timer and counter.
+    pub fn refresh(
+        &mut self,
+        id: u32,
+        notification: Notification,
+        height: u32,
+        held: bool,
+        general: &General,
+    ) {
+        if let Some(i) = self.position(id) {
+            let e = &mut self.entries[i];
+            e.notification = notification;
+            e.height = height;
+            e.held = held;
+            self.sort(general);
+        }
     }
 
     pub fn remove(&mut self, id: u32) -> Option<Entry> {
@@ -159,15 +183,20 @@ impl Store {
     }
 
     pub fn visible(&self, general: &General) -> &[Entry] {
+        let shown = self.entries.len() - self.held();
         let n = match general.max_visible {
-            0 => self.entries.len(),
-            max => max.min(self.entries.len()),
+            0 => shown,
+            max => max.min(shown),
         };
         &self.entries[..n]
     }
 
     pub fn waiting(&self, general: &General) -> usize {
-        self.entries.len() - self.visible(general).len()
+        self.entries.len() - self.held() - self.visible(general).len()
+    }
+
+    pub fn held(&self) -> usize {
+        self.entries.iter().filter(|e| e.held).count()
     }
 
     pub fn set_height(&mut self, id: u32, height: u32) {
@@ -244,7 +273,28 @@ mod tests {
     }
 
     fn insert(s: &mut Store, n: Notification, g: &General) -> Insert {
-        s.insert(n, 10, None, g)
+        s.insert(n, 10, None, false, g)
+    }
+
+    #[test]
+    fn held_entries_are_neither_shown_nor_waiting() {
+        let g = General {
+            max_visible: 1,
+            ..general()
+        };
+        let t0 = Instant::now();
+        let mut s = Store::default();
+        s.insert(test_notification(1), 10, Some(SEC), true, &g);
+        s.insert(test_notification(2), 10, Some(SEC), false, &g);
+        s.insert(test_notification(3), 10, Some(SEC), false, &g);
+        assert_eq!(ids(s.visible(&g)), vec![2]);
+        assert_eq!((s.waiting(&g), s.held()), (1, 1));
+        s.update_timers(&g, t0);
+        assert_eq!(s.expired(t0 + 2 * SEC), vec![2], "held ones don't expire");
+        // released: it takes its place by arrival again
+        s.refresh(1, test_notification(1), 10, false, &g);
+        assert_eq!(ids(s.visible(&g)), vec![1]);
+        assert_eq!((s.waiting(&g), s.held()), (2, 0));
     }
 
     #[test]
@@ -340,8 +390,8 @@ mod tests {
         };
         let t0 = Instant::now();
         let mut s = Store::default();
-        s.insert(test_notification(1), 10, Some(5 * SEC), &g);
-        s.insert(test_notification(2), 10, Some(5 * SEC), &g);
+        s.insert(test_notification(1), 10, Some(5 * SEC), false, &g);
+        s.insert(test_notification(2), 10, Some(5 * SEC), false, &g);
         assert_eq!(s.next_deadline(), None, "nothing runs before update_timers");
         s.update_timers(&g, t0);
         assert_eq!(
@@ -373,7 +423,7 @@ mod tests {
         };
         let mut s = Store::default();
         for (id, h) in [(1, 100), (2, 50), (3, 70)] {
-            s.insert(test_notification(id), h, None, &g);
+            s.insert(test_notification(id), h, None, false, &g);
         }
         assert_eq!(
             s.margins(&g, Some(20)),

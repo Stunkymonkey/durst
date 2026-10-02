@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::core::notification::Urgency;
+use crate::core::rules::Rule;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -13,13 +14,29 @@ pub struct Config {
     pub history: HistoryConfig,
     pub mouse: Mouse,
     pub urgency: Urgencies,
+    pub sound: Sound,
+    pub rules: Vec<Rule>,
     /// the base style with each urgency's overrides applied, see [`Config::style`]
     styles: [Style; 3],
+    /// the same as tables, for merging rule overrides
+    style_tables: [toml::Table; 3],
 }
 
 impl Config {
     pub fn style(&self, urgency: Urgency) -> &Style {
         &self.styles[urgency as usize]
+    }
+
+    /// The urgency's style with `overrides` (from rules) merged over it.
+    pub fn style_with(&self, urgency: Urgency, overrides: &toml::Table) -> Result<Style, String> {
+        if overrides.is_empty() {
+            return Ok(self.style(urgency).clone());
+        }
+        let mut table = self.style_tables[urgency as usize].clone();
+        merge(&mut table, overrides);
+        toml::Value::Table(table)
+            .try_into::<Style>()
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -39,6 +56,8 @@ struct RawConfig {
     mouse: Mouse,
     style: toml::Table,
     urgency: RawUrgencies,
+    sound: Sound,
+    rule: Vec<Rule>,
 }
 
 #[derive(Deserialize, Default)]
@@ -82,6 +101,8 @@ pub struct General {
     pub browser: Vec<String>,
     /// icon theme for icon names; default: GTK's `gtk-icon-theme-name`
     pub icon_theme: Option<String>,
+    /// use the urgency's timeout even if the sender asks for another one
+    pub ignore_dbus_timeout: bool,
 }
 
 impl Default for General {
@@ -98,6 +119,28 @@ impl Default for General {
             output: Output::Focused,
             browser: vec!["xdg-open".into()],
             icon_theme: None,
+            ignore_dbus_timeout: false,
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub struct Sound {
+    /// plays a sound file, the path is appended
+    pub command: Vec<String>,
+    /// sound theme for sound names (freedesktop sound theme spec)
+    pub theme: String,
+    /// play the `sound-file` / `sound-name` hints sent by applications
+    pub play_hints: bool,
+}
+
+impl Default for Sound {
+    fn default() -> Self {
+        Self {
+            command: vec!["pw-play".into()],
+            theme: "freedesktop".into(),
+            play_hints: true,
         }
     }
 }
@@ -379,7 +422,7 @@ fn color<'de, D: Deserializer<'de>>(d: D) -> Result<Color, D::Error> {
 
 /// Merges `over` into `base`; nested tables are merged, other values replaced.
 /// Dotted keys like `border.color = ...` are nested tables in TOML already.
-fn merge(base: &mut toml::Table, over: &toml::Table) {
+pub fn merge(base: &mut toml::Table, over: &toml::Table) {
     for (key, value) in over {
         match (base.get_mut(key), value) {
             (Some(toml::Value::Table(b)), toml::Value::Table(o)) => merge(b, o),
@@ -416,6 +459,7 @@ pub fn parse(s: &str) -> Result<Config, String> {
     let urgencies = [&raw.urgency.low, &raw.urgency.normal, &raw.urgency.critical];
 
     let mut styles = Vec::with_capacity(3);
+    let mut style_tables = Vec::with_capacity(3);
     let mut timeouts = Vec::with_capacity(3);
     for (i, (urgency, name)) in urgencies
         .iter()
@@ -428,17 +472,18 @@ pub fn parse(s: &str) -> Result<Config, String> {
             &toml::from_str(DEFAULT_URGENCY_STYLES[i]).unwrap(),
         );
         merge(&mut table, &urgency.style);
-        let style = toml::Value::Table(table)
+        let style = toml::Value::Table(table.clone())
             .try_into::<Style>()
             .map_err(|e| format!("in [style] or [urgency.{name}.style]: {e}"))?;
         styles.push(style);
+        style_tables.push(table);
         timeouts.push(urgency.timeout.unwrap_or(DEFAULT_TIMEOUTS[i]));
     }
     let timeout = |i: usize| UrgencyConfig {
         timeout: timeouts[i],
     };
 
-    Ok(Config {
+    let config = Config {
         general: raw.general,
         history: raw.history,
         mouse: raw.mouse,
@@ -447,8 +492,21 @@ pub fn parse(s: &str) -> Result<Config, String> {
             normal: timeout(1),
             critical: timeout(2),
         },
+        sound: raw.sound,
+        rules: raw.rule,
         styles: styles.try_into().unwrap(),
-    })
+        style_tables: style_tables.try_into().unwrap(),
+    };
+    // catch typos in rule styles now, not when the rule first matches
+    for (i, rule) in config.rules.iter().enumerate() {
+        for urgency in [Urgency::Low, Urgency::Normal, Urgency::Critical] {
+            config.style_with(urgency, &rule.style).map_err(|e| {
+                let name = rule.name.clone().unwrap_or_else(|| format!("#{}", i + 1));
+                format!("in the style of rule {name}: {e}")
+            })?;
+        }
+    }
+    Ok(config)
 }
 
 #[cfg(test)]
@@ -505,6 +563,15 @@ mod tests {
         let critical = c.style(Urgency::Critical);
         assert_eq!(critical.border.color, parse_color("#f38ba8").unwrap());
         assert_eq!(critical.border.width, 3);
+    }
+
+    #[test]
+    fn rule_styles_are_checked_at_load() {
+        let ok = parse("[[rule]]\nstyle = { border.width = 5 }").unwrap();
+        let style = ok.style_with(Urgency::Normal, &ok.rules[0].style).unwrap();
+        assert_eq!(style.border.width, 5);
+        let err = parse("[[rule]]\nname = \"x\"\nstyle = { bordr = 5 }").unwrap_err();
+        assert!(err.contains("rule x") && err.contains("bordr"), "{err}");
     }
 
     #[test]

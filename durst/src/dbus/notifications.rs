@@ -20,6 +20,7 @@ const CAPABILITIES: &[&str] = &[
     "body-hyperlinks",
     "body-markup",
     "icon-static",
+    "sound",
     "x-dunst-stack-tag",
 ];
 
@@ -167,6 +168,9 @@ fn parse_hints(hints: &HashMap<String, OwnedValue>) -> Hints {
         value: int("value").map(|v| v.clamp(0, 100) as i32),
         stack_tag: string("x-dunst-stack-tag")
             .or_else(|| string("x-canonical-private-synchronous")),
+        sound_file: string("sound-file"),
+        sound_name: string("sound-name"),
+        suppress_sound: boolean("suppress-sound"),
     }
 }
 
