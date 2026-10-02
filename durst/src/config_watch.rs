@@ -31,7 +31,10 @@ fn stream(path: &PathBuf) -> impl Stream<Item = ()> + use<> {
         let name = name.to_owned();
         let (tx, mut rx) = unbounded();
         let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            // only changes: inotify also reports reads, and every reload reads
+            // the file, which would trigger the next reload, forever
             if let Ok(event) = event
+                && (event.kind.is_create() || event.kind.is_modify() || event.kind.is_remove())
                 && event.paths.iter().any(|p| p.file_name() == Some(&name))
             {
                 let _ = tx.unbounded_send(());
