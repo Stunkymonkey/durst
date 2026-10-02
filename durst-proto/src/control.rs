@@ -44,6 +44,13 @@ pub struct DaemonInfo {
     pub held: u32,
     pub history: u32,
     pub modes: Vec<String>,
+    /// no input for `idle_threshold`: timeouts are paused
+    pub idle: bool,
+    /// the session is locked: timeouts are paused
+    pub locked: bool,
+    /// a focused window is fullscreen
+    pub fullscreen: bool,
+    pub outputs: Vec<String>,
 }
 
 #[zbus::proxy(

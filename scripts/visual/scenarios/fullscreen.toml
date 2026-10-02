@@ -1,0 +1,11 @@
+[[rule]]
+summary = "^Delayed$"
+fullscreen = "delay"
+
+[[rule]]
+summary = "^Pushed back$"
+fullscreen = "pushback"
+
+[[rule]]
+fullscreen_active = true
+set_body = "arrived during fullscreen"

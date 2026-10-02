@@ -211,11 +211,12 @@ impl Store {
         }
     }
 
-    /// Runs the timers of visible, unhovered entries and pauses all others.
-    pub fn update_timers(&mut self, general: &General, now: Instant) {
+    /// Runs the timers of visible, unhovered entries and pauses all others;
+    /// `paused` pauses all (the user is idle or the session locked).
+    pub fn update_timers(&mut self, general: &General, now: Instant, paused: bool) {
         let visible = self.visible(general).len();
         for (i, e) in self.entries.iter_mut().enumerate() {
-            if i < visible && !e.hovered {
+            if i < visible && !e.hovered && !paused {
                 e.timer.resume(now);
             } else {
                 e.timer.pause(now);
@@ -289,7 +290,7 @@ mod tests {
         s.insert(test_notification(3), 10, Some(SEC), false, &g);
         assert_eq!(ids(s.visible(&g)), vec![2]);
         assert_eq!((s.waiting(&g), s.held()), (1, 1));
-        s.update_timers(&g, t0);
+        s.update_timers(&g, t0, false);
         assert_eq!(s.expired(t0 + 2 * SEC), vec![2], "held ones don't expire");
         // released: it takes its place by arrival again
         s.refresh(1, test_notification(1), 10, false, &g);
@@ -393,7 +394,7 @@ mod tests {
         s.insert(test_notification(1), 10, Some(5 * SEC), false, &g);
         s.insert(test_notification(2), 10, Some(5 * SEC), false, &g);
         assert_eq!(s.next_deadline(), None, "nothing runs before update_timers");
-        s.update_timers(&g, t0);
+        s.update_timers(&g, t0, false);
         assert_eq!(
             s.next_deadline(),
             Some(t0 + 5 * SEC),
@@ -402,17 +403,23 @@ mod tests {
 
         // hovered for 10s at t=1: paused with 4s left
         s.set_hovered(1, true);
-        s.update_timers(&g, t0 + SEC);
+        s.update_timers(&g, t0 + SEC, false);
         assert!(s.expired(t0 + 10 * SEC).is_empty());
         s.set_hovered(1, false);
-        s.update_timers(&g, t0 + 11 * SEC);
+        s.update_timers(&g, t0 + 11 * SEC, false);
         assert_eq!(s.next_deadline(), Some(t0 + 15 * SEC));
         assert_eq!(s.expired(t0 + 15 * SEC), vec![1]);
 
         // the waiting one starts its full timeout once it becomes visible
         s.remove(1);
-        s.update_timers(&g, t0 + 15 * SEC);
+        s.update_timers(&g, t0 + 15 * SEC, false);
         assert_eq!(s.next_deadline(), Some(t0 + 20 * SEC));
+
+        // idle (or locked) from t=16 to t=26: paused with 4s left
+        s.update_timers(&g, t0 + 16 * SEC, true);
+        assert_eq!(s.next_deadline(), None);
+        s.update_timers(&g, t0 + 26 * SEC, false);
+        assert_eq!(s.next_deadline(), Some(t0 + 30 * SEC));
     }
 
     #[test]

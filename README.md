@@ -18,7 +18,7 @@ See [PLAN.md](PLAN.md) for the target design and the roadmap.
 ### used wayland-protocols
 
 - [wlr-layer-shell-unstable-v1](https://wayland.app/protocols/wlr-layer-shell-unstable-v1): render notifications and OSDs
-- [ext-idle-notify-v1](https://wayland.app/protocols/ext-idle-notify-v1): detect user idle
+- [ext-idle-notify-v1](https://wayland.app/protocols/ext-idle-notify-v1): pause timeouts while the user is idle
 - [wlr-foreign-toplevel-management-unstable-v1](https://wayland.app/protocols/wlr-foreign-toplevel-management-unstable-v1): detect fullscreen applications
 
 ### other
@@ -77,6 +77,9 @@ scripts/visual/run-all.sh    # builds, runs all scenarios, prints ok/FAIL
 
 Screenshots and measurements land in `target/visual/`. Rendering uses iced's
 software renderer (`ICED_BACKEND=tiny-skia`), so pixels are deterministic.
+The tools (sway, grim, foot, ...) come from the devshell; `tools/vpointer`
+(virtual pointer) and `tools/fake-logind` (lock state) are part of the
+workspace. `REPEAT=N scripts/visual/run-all.sh` runs every scenario N times.
 
 ## ToDo
 
@@ -87,7 +90,7 @@ The detailed milestones are in [PLAN.md](PLAN.md#5-milestones).
  - [x] M1: full notification spec, stack layout, icons, markup, progress, actions, mouse bindings
  - [x] M2: `durstctl` + control interface, history
  - [x] M3: rules & modes (DND)
- - [ ] M4: idle pause, fullscreen policy, lock detection
+ - [x] M4: idle pause, fullscreen policy, lock detection, output = "all"
  - [ ] M5: hot reload, systemd unit, D-Bus activation
  - [ ] M6: volume OSD (PipeWire)
  - [ ] M7: media OSD (MPRIS)
