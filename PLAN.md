@@ -482,7 +482,20 @@ debug info made each debug binary ~450 MB and filled the disk.
 - Flake package output, a CI matrix (fmt, clippy, test) and a README rewrite
   with the config reference.
 
-### M6 – Volume OSD
+### M6 – Volume OSD ✅ done 2026-10-02
+
+Outcome: native PipeWire (`pipewire-rs` 0.10, own thread and main loop).
+Setting a volume follows WirePlumber's mixer: nodes of a sound card get the
+change on the device's active `Route` (saved there), other nodes on their
+`Props` (R5: no trait/wpctl fallback was needed). Percent is the cubic scale
+of pavucontrol/wpctl; read-only checks on real hardware matched `wpctl
+get-volume` and found the device routes. Writing through a hardware route is
+not tested yet (the sandbox's null sink has no device). Slider updates are
+throttled to one per 30 ms (R6). The mute button has a fixed width so the
+slider doesn't jump when its label changes (found by the drag test). Tests
+run a private PipeWire (`scripts/visual/pipewire.conf`) and read the result
+back with `pw-dump`. Node info updates only carry what changed: applying
+them unconditionally lost the node's name after every volume change.
 - PipeWire backend (4.8), volume OSD UI, `durstctl volume`, `osd show volume|mic`.
 
 ### M7 – Media OSD
@@ -525,8 +538,8 @@ debug info made each debug binary ~450 MB and filled the disk.
 | R2 | iced_layershell API churn between versions | Pin the versions and keep all layer-shell calls in `app.rs`. Already happened once: the winit-core beta pin (M0). |
 | R3 | Not every compositor implements `wlr-foreign-toplevel-management` (e.g. GNOME). | Optional feature with a graceful fallback. GNOME/KDE aren't targets anyway, since they run their own notification servers. |
 | R4 | `focused` output depends on the compositor, which places output-less layer surfaces where it likes. | Document it. `name:` is always available for deterministic placement. |
-| R5 | PipeWire API complexity (default node tracking, channel volumes). | Isolate it behind `audio::Backend` with a trait so a `wpctl` fallback stays possible. |
-| R6 | The interactive slider floods PipeWire with updates. | Debounce, and only send the last value. |
+| R5 | PipeWire API complexity (default node tracking, channel volumes). | Resolved in M6: `audio.rs` follows the `default` metadata, node `Props` and device `Route`s natively; no fallback needed. |
+| R6 | The interactive slider floods PipeWire with updates. | Resolved in M6: at most one update per 30 ms, the last value on release. |
 | R8 | iced_layershell silently drops changes (margin, size, removal) for surfaces it hasn't created yet. Quick bursts of notifications reorder the stack before the new surfaces exist: a surface stays at its old place, hidden under another (`urgency` failed 2 of 15 runs). | Surfaces count as `opened` only after the window `Opened` event; until then `sync` sends no changes (and diffs again afterwards), and removals are deferred. 30/30 runs pass. `REPEAT=N scripts/visual/run-all.sh` catches such flakiness. |
 | R7 | iced_tiny_skia 0.14 misplaces scaled raster images: it truncates the position in image space, so an upscaled image moves by up to the scale factor (found by `scenarios/content.sh`). | durst scales raster icons to their display size itself (`ui::icons::scaled`). HiDPI output scaling can still shift by up to the scale factor; report upstream. |
 

@@ -26,6 +26,10 @@
 #   durstctl ...        the CLI built next to durst
 #   state KEY           a field of `durstctl info --json` (idle, locked, ...)
 #   lock / unlock       lock state of the fake logind durst watches
+#   pw_volume NODE      "PERCENT MUTED" of test-sink / test-source, read
+#                       from the private PipeWire itself
+#   pw_set NODE PERCENT change a volume like another program would
+#   press X Y / release mouse button held down, e.g. to drag
 #   fullscreen_window   open a black window and make it fullscreen;
 #   leave_fullscreen    and close it again (it would disturb measurements)
 # A line `# outputs: N` in the scenario gives sway N outputs side by side
@@ -135,6 +139,14 @@ wait_for busctl --user status org.freedesktop.login1 \
     || { echo "fake logind missing, see $log/logind.log" >&2; KEEP_LOGS=1; exit 1; }
 export DURST_LOGIND_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"
 
+# a private PipeWire with a null sink and source (scripts/visual/pipewire.conf);
+# its socket is in the sandbox's XDG_RUNTIME_DIR, the real audio is untouched
+pipewire -c "$here/pipewire.conf" >"$log/pipewire.log" 2>&1 &
+wait_for test -S "$XDG_RUNTIME_DIR/pipewire-0" \
+    || { echo "pipewire missing, see $log/pipewire.log" >&2; KEEP_LOGS=1; exit 1; }
+wait_for pw-metadata -n default 0 default.audio.sink '{ "name": "test-sink" }'
+pw-metadata -n default 0 default.audio.source '{ "name": "test-source" }' >/dev/null
+
 dbus-monitor --session "type='signal',interface='org.freedesktop.Notifications'" \
     "type='signal',path='/org/durst_notification/Durst'" \
     >"$work/signals" 2>/dev/null &
@@ -163,6 +175,9 @@ else
         >"$log/durst.log" 2>&1 &
     wait_for busctl --user status org.freedesktop.Notifications \
         || { echo "durst did not claim the bus name, see $log/durst.log" >&2; KEEP_LOGS=1; exit 1; }
+    # connected to the private PipeWire as well
+    wait_for "$root/target/debug/durstctl" volume get \
+        || { echo "durst has no volume, see $log/durst.log" >&2; KEEP_LOGS=1; exit 1; }
 fi
 
 notify() { notify-send -p "$@"; }
@@ -187,6 +202,32 @@ signals() {
 click() {
     printf 'move %s %s\nclick %s\n' "$1" "$2" "${3:-left}" >&3
     sleep 0.2
+}
+press() {
+    printf 'move %s %s\npress left\n' "$1" "$2" >&3
+    sleep 0.2
+}
+release() {
+    printf 'move %s %s\nrelease left\n' "$1" "$2" >&3
+    sleep 0.2
+}
+pw_node() {
+    pw-dump | python3 -c "
+import json, sys
+for o in json.load(sys.stdin):
+    i = o.get('info') or {}
+    if (i.get('props') or {}).get('node.name') == sys.argv[1]:
+        props = [p for p in (i.get('params') or {}).get('Props', []) if 'channelVolumes' in p]
+        print(o['id'], round(max(props[0]['channelVolumes']) ** (1 / 3) * 100), props[0]['mute'])
+" "$1"
+}
+pw_volume() { pw_node "$1" | cut -d' ' -f2-; }
+pw_set() {
+    local id linear
+    id=$(pw_node "$1" | cut -d' ' -f1)
+    linear=$(python3 -c "print(($2 / 100) ** 3)")
+    pw-cli set-param "$id" Props "{ channelVolumes: [ $linear, $linear ] }" >/dev/null
+    sleep 0.3
 }
 pointer() {
     printf 'move %s %s\n' "$1" "$2" >&3

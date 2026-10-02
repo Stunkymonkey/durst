@@ -6,7 +6,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use durst_proto::control::{DaemonInfo, NotificationInfo, OBJECT_PATH};
+use durst_proto::control::{DaemonInfo, NotificationInfo, OBJECT_PATH, VolumeInfo};
 use futures::SinkExt;
 use futures::channel::mpsc::Sender;
 use futures::channel::oneshot;
@@ -31,6 +31,11 @@ pub enum Command {
     Info,
     Modes(ModeChange),
     KnownModes,
+    /// the default source if true, else the default sink
+    Volume(bool),
+    SetVolume(bool, String),
+    SetMute(bool, String),
+    ShowVolumeOsd(bool),
 }
 
 #[derive(Debug, Clone)]
@@ -48,8 +53,10 @@ pub enum Reply {
     Notifications(Vec<NotificationInfo>),
     Info(DaemonInfo),
     Modes(Vec<String>),
+    Volume(VolumeInfo),
     NotFound(String),
     InvalidConfig(String),
+    InvalidArgument(String),
 }
 
 /// Answers a [`Command`] once; cloneable so it can travel in a message.
@@ -87,6 +94,7 @@ pub enum Error {
     ZBus(zbus::Error),
     NotFound(String),
     InvalidConfig(String),
+    InvalidArgument(String),
 }
 
 pub struct Control {
@@ -110,6 +118,7 @@ impl Control {
         match rx.await {
             Ok(Reply::NotFound(msg)) => Err(Error::NotFound(msg)),
             Ok(Reply::InvalidConfig(msg)) => Err(Error::InvalidConfig(msg)),
+            Ok(Reply::InvalidArgument(msg)) => Err(Error::InvalidArgument(msg)),
             Ok(reply) => Ok(reply),
             Err(_) => Err(Error::ZBus(zbus::Error::Failure("no reply".into()))),
         }
@@ -122,6 +131,13 @@ impl Control {
     async fn modes(&self, command: Command) -> Result<Vec<String>, Error> {
         match self.request(command).await? {
             Reply::Modes(modes) => Ok(modes),
+            reply => Err(unexpected(reply)),
+        }
+    }
+
+    async fn volume_reply(&self, command: Command) -> Result<VolumeInfo, Error> {
+        match self.request(command).await? {
+            Reply::Volume(volume) => Ok(volume),
             reply => Err(unexpected(reply)),
         }
     }
@@ -200,6 +216,22 @@ impl Control {
 
     async fn known_modes(&self) -> Result<Vec<String>, Error> {
         self.modes(Command::KnownModes).await
+    }
+
+    async fn volume(&self, mic: bool) -> Result<VolumeInfo, Error> {
+        self.volume_reply(Command::Volume(mic)).await
+    }
+
+    async fn set_volume(&self, mic: bool, change: String) -> Result<VolumeInfo, Error> {
+        self.volume_reply(Command::SetVolume(mic, change)).await
+    }
+
+    async fn set_mute(&self, mic: bool, state: String) -> Result<VolumeInfo, Error> {
+        self.volume_reply(Command::SetMute(mic, state)).await
+    }
+
+    async fn show_volume_osd(&self, mic: bool) -> Result<(), Error> {
+        self.done(Command::ShowVolumeOsd(mic)).await
     }
 
     #[zbus(property)]

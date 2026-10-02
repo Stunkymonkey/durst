@@ -3,12 +3,13 @@ mod cli;
 use std::process::ExitCode;
 
 use clap::Parser;
-use durst_proto::control::{DurstProxy, NotificationInfo, error};
+use durst_proto::control::{DurstProxy, NotificationInfo, VolumeInfo, error};
 
-use cli::{Cli, Cmd, HistoryCmd, ModeCmd, NotifCmd};
+use cli::{Cli, Cmd, HistoryCmd, ModeCmd, NotifCmd, OsdCmd, VolumeCmd};
 
 /// Exit codes, see the help text in cli.rs.
 const NOT_RUNNING: u8 = 1;
+const INVALID_ARGUMENT: u8 = 2;
 const NOT_FOUND: u8 = 3;
 const INVALID_CONFIG: u8 = 4;
 
@@ -32,6 +33,7 @@ fn describe(e: &zbus::Error) -> (u8, String) {
             match name.as_str() {
                 error::NOT_FOUND => (NOT_FOUND, msg),
                 error::INVALID_CONFIG => (INVALID_CONFIG, format!("invalid config: {msg}")),
+                error::INVALID_ARGUMENT => (INVALID_ARGUMENT, msg),
                 "org.freedesktop.DBus.Error.ServiceUnknown"
                 | "org.freedesktop.DBus.Error.NameHasNoOwner" => {
                     (NOT_RUNNING, "durst is not running".into())
@@ -89,6 +91,20 @@ async fn run(command: Cmd) -> zbus::Result<()> {
         Cmd::Mode(ModeCmd::Enable { mode }) => print_modes(&durst.enable_mode(&mode).await?),
         Cmd::Mode(ModeCmd::Disable { mode }) => print_modes(&durst.disable_mode(&mode).await?),
         Cmd::Mode(ModeCmd::Toggle { mode }) => print_modes(&durst.toggle_mode(&mode).await?),
+        Cmd::Volume(VolumeCmd::Get { mic, json }) => print_volume(&durst.volume(mic).await?, json),
+        Cmd::Volume(VolumeCmd::Set { change, mic }) => {
+            print_volume(&durst.set_volume(mic, &change).await?, false)
+        }
+        Cmd::Volume(VolumeCmd::Up { mic }) => {
+            print_volume(&durst.set_volume(mic, "up").await?, false)
+        }
+        Cmd::Volume(VolumeCmd::Down { mic }) => {
+            print_volume(&durst.set_volume(mic, "down").await?, false)
+        }
+        Cmd::Volume(VolumeCmd::Mute { state, mic }) => {
+            print_volume(&durst.set_mute(mic, &state).await?, false)
+        }
+        Cmd::Osd(OsdCmd::Show { kind }) => durst.show_volume_osd(kind == "mic").await?,
         Cmd::Reload => durst.reload().await?,
         Cmd::Info { json } => {
             let info = durst.info().await?;
@@ -110,6 +126,16 @@ async fn run(command: Cmd) -> zbus::Result<()> {
         }
     }
     Ok(())
+}
+
+fn print_volume(v: &VolumeInfo, json: bool) {
+    if json {
+        println!("{}", serde_json::to_string_pretty(v).unwrap());
+    } else if v.muted {
+        println!("{} muted  {}", v.percent, v.description);
+    } else {
+        println!("{}  {}", v.percent, v.description);
+    }
 }
 
 fn print_modes(modes: &[String]) {

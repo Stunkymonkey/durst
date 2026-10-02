@@ -6,6 +6,8 @@
 //! usage: vpointer WIDTH HEIGHT, then commands on stdin, one per line:
 //!   move X Y        absolute position in output pixels
 //!   click BUTTON    left | right | middle
+//!   press BUTTON    press and hold, e.g. to drag
+//!   release BUTTON
 //!   scroll DY       vertical scroll, positive is down
 
 use std::io::BufRead;
@@ -50,6 +52,15 @@ ignore_events!(
     ZwlrVirtualPointerV1
 );
 
+fn button_code(button: &str) -> Result<u32, String> {
+    match button {
+        "left" => Ok(BTN_LEFT),
+        "right" => Ok(BTN_RIGHT),
+        "middle" => Ok(BTN_MIDDLE),
+        _ => Err(format!("unknown button {button:?}")),
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<u32> = std::env::args()
         .skip(1)
@@ -77,15 +88,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 pointer.motion_absolute(time(), x.parse()?, y.parse()?, width, height);
             }
             ["click", button] => {
-                let code = match button {
-                    "left" => BTN_LEFT,
-                    "right" => BTN_RIGHT,
-                    "middle" => BTN_MIDDLE,
-                    _ => return Err(format!("unknown button {button:?}").into()),
-                };
+                let code = button_code(button)?;
                 pointer.button(time(), code, wl_pointer::ButtonState::Pressed);
                 pointer.frame();
                 pointer.button(time(), code, wl_pointer::ButtonState::Released);
+            }
+            ["press", button] => {
+                pointer.button(
+                    time(),
+                    button_code(button)?,
+                    wl_pointer::ButtonState::Pressed,
+                );
+            }
+            ["release", button] => {
+                pointer.button(
+                    time(),
+                    button_code(button)?,
+                    wl_pointer::ButtonState::Released,
+                );
             }
             ["scroll", dy] => {
                 pointer.axis(time(), wl_pointer::Axis::VerticalScroll, dy.parse()?);

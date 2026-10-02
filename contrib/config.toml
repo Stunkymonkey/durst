@@ -76,6 +76,21 @@ theme = "freedesktop"
 # play the sound-file / sound-name hints sent by applications
 play_hints = true
 
+[osd.volume]
+# on-screen display for speaker and microphone volume (normal style)
+enabled = true
+anchor = "bottom"
+offset = [0, 80]
+width = 360
+# hidden after this long, unless the pointer is over it
+timeout = "2s"
+# percent per scroll step and for `durstctl volume up/down`
+step = 5
+# the slider's maximum; above 100 amplifies
+max_volume = 100
+# also show it when another program changes the volume
+show_on_external_change = true
+
 # Rules are applied in order to every notification; each sees the result of
 # the earlier ones. All matchers given must match; text matchers are regexes
 # searched anywhere (anchor them with ^...$).
