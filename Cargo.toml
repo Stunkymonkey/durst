@@ -7,3 +7,11 @@ members = [
     "tools/fake-logind",
     "tools/vpointer",
 ]
+
+# full debug info made every debug build of durst ~450 MB; backtraces still
+# get file and line
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

@@ -20,6 +20,7 @@ use iced_layershell::to_layer_message;
 use zbus::Connection;
 
 use crate::config::{self, Anchor, Config, MouseAction, Output, Style};
+use crate::config_watch;
 use crate::core::history::History;
 use crate::core::layout::Margin;
 use crate::core::notification::{Notification, Urgency};
@@ -49,6 +50,9 @@ pub enum Message {
     Tick(Instant),
     Wayland(wayland::Event),
     Locked(bool),
+    /// the config file changed on disk
+    ConfigChanged,
+    ConfigError(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -94,7 +98,15 @@ pub struct ConfigSource {
     pub path: PathBuf,
     /// given with `-c`: a missing file is an error
     pub explicit: bool,
+    /// the text of the active config; `None` = defaults
+    pub text: Option<String>,
+    /// the config could not be loaded at startup, the defaults are active
+    pub error: Option<String>,
 }
+
+/// The id of durst's own notification about an invalid config; far away
+/// from the ids handed out to senders, which count up from 1.
+const CONFIG_ERROR_ID: u32 = u32::MAX;
 
 pub struct App {
     config: Config,
@@ -121,7 +133,13 @@ pub struct App {
 
 pub fn run(config: Config, source: ConfigSource) -> Result<(), iced_layershell::Error> {
     daemon(
-        move || App::new(config.clone(), source.clone()),
+        move || {
+            let task = match &source.error {
+                Some(e) => Task::done(Message::ConfigError(e.clone())),
+                None => Task::none(),
+            };
+            (App::new(config.clone(), source.clone()), task)
+        },
         || NAMESPACE.to_string(),
         App::update,
         App::view,
@@ -170,11 +188,17 @@ impl App {
         let wayland =
             wayland::subscription(self.config.general.idle_threshold.0).map(Message::Wayland);
         let locked = logind::subscription().map(Message::Locked);
+        let config =
+            config_watch::subscription(self.source.path.clone()).map(|()| Message::ConfigChanged);
         let tick = self
             .store
             .next_deadline()
             .map(|_| iced::time::every(TICK).map(Message::Tick));
-        Subscription::batch([dbus, opened, wayland, locked].into_iter().chain(tick))
+        Subscription::batch(
+            [dbus, opened, wayland, locked, config]
+                .into_iter()
+                .chain(tick),
+        )
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -230,6 +254,11 @@ impl App {
                 self.outputs = outputs;
                 Task::none()
             }
+            Message::ConfigChanged => {
+                log::debug!("config file changed");
+                self.reload(false).unwrap_or_else(|(_, task)| task)
+            }
+            Message::ConfigError(e) => self.show_config_error(&e, "durst uses the defaults"),
             Message::Locked(locked) => {
                 log::debug!("locked: {locked}");
                 self.locked = locked;
@@ -813,12 +842,9 @@ impl App {
                 self.history.clear();
                 (Reply::Done, Task::none())
             }
-            Command::Reload => match config::load(&self.source.path, self.source.explicit) {
-                Ok(config) => (Reply::Done, self.apply_config(config)),
-                Err(e) => {
-                    log::warn!("keeping the old config: {e}");
-                    (Reply::InvalidConfig(e), Task::none())
-                }
+            Command::Reload => match self.reload(true) {
+                Ok(task) => (Reply::Done, task),
+                Err((e, task)) => (Reply::InvalidConfig(e), task),
             },
             Command::Info => {
                 let status = self.status();
@@ -867,6 +893,64 @@ impl App {
                 (Reply::Modes(known.into_iter().collect()), Task::none())
             }
         }
+    }
+
+    /// Loads the config file again. Unless `force`d, an unchanged file is
+    /// left alone (the surfaces would be reopened for nothing). An invalid
+    /// config keeps the active one and shows the error as a notification.
+    fn reload(&mut self, force: bool) -> Result<Task<Message>, (String, Task<Message>)> {
+        let loaded = config::read(&self.source.path, self.source.explicit).and_then(|text| {
+            if !force && text == self.source.text && self.store.get(CONFIG_ERROR_ID).is_none() {
+                return Ok(None);
+            }
+            let config = match &text {
+                Some(s) => {
+                    config::parse(s).map_err(|e| format!("{}: {e}", self.source.path.display()))?
+                }
+                None => Config::default(),
+            };
+            Ok(Some((config, text)))
+        });
+        match loaded {
+            Ok(None) => Ok(Task::none()),
+            Ok(Some((config, text))) => {
+                self.source.text = text;
+                let resolved = self.close(CONFIG_ERROR_ID, CloseReason::Closed);
+                Ok(Task::batch([self.apply_config(config), resolved]))
+            }
+            Err(e) => {
+                log::warn!("keeping the old config: {e}");
+                let task = self.show_config_error(&e, "the previous one stays active");
+                Err((e, task))
+            }
+        }
+    }
+
+    /// durst's own critical notification about an invalid config; replaced
+    /// by the next error, closed once the config is valid again.
+    fn show_config_error(&mut self, error: &str, consequence: &str) -> Task<Message> {
+        let escape = |s: &str| {
+            s.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+        };
+        let mut hints = crate::core::notification::Hints {
+            urgency: Urgency::Critical,
+            ..Default::default()
+        };
+        hints.transient = true;
+        let n = Notification {
+            id: CONFIG_ERROR_ID,
+            app_name: "durst".into(),
+            app_icon: "dialog-error".into(),
+            summary: format!("Invalid config, {consequence}"),
+            body: escape(&config::short_error(error)),
+            actions: vec![],
+            hints,
+            expire_timeout: 0,
+            received: 0,
+        };
+        self.receive(n, false)
     }
 
     /// Switches to a new config: evaluates the rules and renders every
