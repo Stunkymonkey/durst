@@ -1,6 +1,7 @@
 mod app;
 mod cli;
 mod config;
+mod config_watch;
 mod core;
 mod dbus;
 mod effects;
@@ -27,16 +28,24 @@ fn main() {
         Some(path) => (PathBuf::from(path), true),
         None => (config::default_path(), false),
     };
-    let config = match config::load(&path, explicit) {
-        Ok(config) => config,
+    // a broken config must not leave the user without notifications: start
+    // with the defaults and show the error as a notification
+    let (config, text, error) = match config::load(&path, explicit) {
+        Ok((config, text)) => (config, text, None),
         Err(e) => {
             log::error!("{e}");
-            std::process::exit(1);
+            (config::Config::default(), None, Some(e))
         }
     };
     log::debug!("{config:?}");
 
-    if let Err(e) = app::run(config, app::ConfigSource { path, explicit }) {
+    let source = app::ConfigSource {
+        path,
+        explicit,
+        text,
+        error,
+    };
+    if let Err(e) = app::run(config, source) {
         log::error!("{e}");
         std::process::exit(1);
     }

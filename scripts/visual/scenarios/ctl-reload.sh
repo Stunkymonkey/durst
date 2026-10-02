@@ -1,5 +1,6 @@
 # durstctl reload: a new width applies to the displayed notification; an
-# invalid config is rejected (exit 4) and the old one stays active.
+# invalid config is rejected (exit 4), the old one stays active and durst
+# shows the error as a critical notification.
 config="$XDG_CONFIG_HOME/durst/config.toml"
 mkdir -p "$(dirname "$config")"
 notify "Reload me" "the box gets narrower" >/dev/null
@@ -17,6 +18,7 @@ verify() {
     echo "error: $(cat "$DURST_TEST_DIR/reload.err")"
     [[ $before == 380 && $reload_ok == 0 && $reload_bad == 4 ]] &&
     grep -q widht "$DURST_TEST_DIR/reload.err" &&
-    [[ $info == "1 $config" ]] &&
-    check 'len(boxes) == 1 and boxes[0]["w"] == 300 and boxes[0]["x"] == size[0] - 20 - 300'
+    [[ $info == "2 $config" ]] &&
+    check 'len(boxes) == 2 and all(b["w"] == 300 and b["x"] == size[0] - 20 - 300 for b in boxes)' &&
+    [[ "$(pixel 1110 21)" == "243 139 168" ]]
 }

@@ -462,7 +462,19 @@ harness supports several headless outputs (`# outputs: N`).
 - Idle pause, fullscreen policy, lock detection (4.7).
 - `output = "all"`: enumerate outputs on our own Wayland connection.
 
-### M5 – Operations
+### M5 – Operations ✅ done 2026-10-02
+
+Outcome: the config directory is watched (editors and home-manager replace
+the file, which would end a watch on the file itself); unchanged content is
+skipped. A broken config keeps the previous one, or the defaults at startup
+instead of exiting (under systemd that would be a restart loop), and is
+reported in a critical notification of durst's own (id `u32::MAX`) that
+closes once the config is valid. `contrib/` has the systemd user unit and
+the D-Bus activation files for both bus names; the `activation` scenario
+starts durst through them. The flake has `packages.default` (binaries
+wrapped with their runtime libraries, man pages, completions, unit, service
+files, example config). The dev profile builds with line tables only: full
+debug info made each debug binary ~450 MB and filled the disk.
 - Config hot reload (file watch plus `durstctl reload`), error notification on
   a bad config.
 - `contrib/durst.service` (`Type=dbus`, `BusName=org.freedesktop.Notifications`,

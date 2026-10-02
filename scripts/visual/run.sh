@@ -30,6 +30,9 @@
 #   leave_fullscreen    and close it again (it would disturb measurements)
 # A line `# outputs: N` in the scenario gives sway N outputs side by side
 # (HEADLESS-1, HEADLESS-2, ...); screenshots then cover all of them.
+# A line `# activation` doesn't start durst: the bus starts it on demand from
+# the service files in contrib/dbus, after the environment was handed over
+# with dbus-update-activation-environment, like in a real session.
 #   status CMD...       run CMD (stderr dropped) and print its exit code;
 #                       scenarios run with `set -e`, so use this for
 #                       commands that are expected to fail
@@ -48,10 +51,27 @@ mkdir -p "$(dirname "$out")"
 res="${RESOLUTION:-1280x720}"
 outputs="$(sed -nE 's/^# outputs: *([0-9]+).*/\1/p' "$scenario" | head -1)"
 outputs="${outputs:-1}"
+activation="$(grep -c '^# activation' "$scenario" || true)"
 
 if [[ -z "${DURST_VISUAL_ISOLATED:-}" ]]; then
+    bus_config="$here/session.conf"
+    if [[ $activation -gt 0 ]]; then
+        # the real service files, with a wrapper as the binary that logs
+        act="$(mktemp -d)"
+        mkdir -p "$act/services" "$act/bin"
+        printf '#!/bin/sh\nexec %q "$@" >>"$DURST_TEST_DIR/logs/durst.log" 2>&1\n' \
+            "${DURST_BIN:-$root/target/debug/durst}" >"$act/bin/durst"
+        chmod +x "$act/bin/durst"
+        for f in "$root"/contrib/dbus/*.service; do
+            sed "s|@bindir@|$act/bin|" "$f" >"$act/services/$(basename "$f")"
+        done
+        sed "s|</busconfig>|  <servicedir>$act/services</servicedir>\n</busconfig>|" \
+            "$here/session.conf" >"$act/session.conf"
+        bus_config="$act/session.conf"
+    fi
     # re-exec inside a private session bus
-    exec env DURST_VISUAL_ISOLATED=1 dbus-run-session --config-file="$here/session.conf" -- "$0" "$@"
+    exec env DURST_VISUAL_ISOLATED=1 DURST_ACTIVATION_DIR="${act:-}" \
+        dbus-run-session --config-file="$bus_config" -- "$0" "$@"
 fi
 
 work="$(mktemp -d)"
@@ -59,6 +79,12 @@ chmod 700 "$work"
 log="$work/logs"
 mkdir -p "$log"
 cleanup() {
+    if [[ $activation -gt 0 ]]; then
+        # started by the bus, not by us
+        busctl --user status org.freedesktop.Notifications 2>/dev/null \
+            | sed -n 's/^PID=//p' | xargs -r kill 2>/dev/null || true
+        rm -rf "${DURST_ACTIVATION_DIR:-/nonexistent}"
+    fi
     jobs -p | xargs -r kill 2>/dev/null || true
     wait 2>/dev/null || true
     if [[ "${KEEP_LOGS:-0}" == 1 ]]; then echo "logs: $log" >&2; else rm -rf "$work"; fi
@@ -116,20 +142,28 @@ dbus-monitor --session "type='signal',interface='org.freedesktop.Notifications'"
 export DURST_TEST_DIR="$work"
 # scenarios can provide icon themes and .desktop files in $DURST_TEST_DIR/share
 export XDG_DATA_DIRS="$work/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-# never read the real user's durst or GTK config
+# never read the real user's durst or GTK config; the directory exists so
+# durst can watch it for a config file appearing
 export XDG_CONFIG_HOME="$work/config"
+mkdir -p "$XDG_CONFIG_HOME/durst"
 # durstctl for the scenarios
 export PATH="$root/target/debug:$PATH"
 config="${scenario%.sh}.toml"
 if [[ -f "$config" ]]; then DURST_ARGS="-c $config ${DURST_ARGS:-}"; fi
 
 # software rendering: no GPU in headless sway, and deterministic pixels
-# shellcheck disable=SC2086
-ICED_BACKEND="${ICED_BACKEND:-tiny-skia}" LD_LIBRARY_PATH="$durst_ld" RUST_LOG="${RUST_LOG:-durst=debug}" \
-    "${DURST_BIN:-$root/target/debug/durst}" ${DURST_ARGS:-} >"$log/durst.log" 2>&1 &
-
-wait_for busctl --user status org.freedesktop.Notifications \
-    || { echo "durst did not claim the bus name, see $log/durst.log" >&2; KEEP_LOGS=1; exit 1; }
+export ICED_BACKEND="${ICED_BACKEND:-tiny-skia}" RUST_LOG="${RUST_LOG:-durst=debug}"
+if [[ $activation -gt 0 ]]; then
+    # what a session's startup does (e.g. in the sway config), so that
+    # services started by the bus find the display
+    LD_LIBRARY_PATH="$durst_ld" dbus-update-activation-environment --all
+else
+    # shellcheck disable=SC2086
+    LD_LIBRARY_PATH="$durst_ld" "${DURST_BIN:-$root/target/debug/durst}" ${DURST_ARGS:-} \
+        >"$log/durst.log" 2>&1 &
+    wait_for busctl --user status org.freedesktop.Notifications \
+        || { echo "durst did not claim the bus name, see $log/durst.log" >&2; KEEP_LOGS=1; exit 1; }
+fi
 
 notify() { notify-send -p "$@"; }
 status() { "$@" 2>/dev/null && echo 0 || echo $?; }
