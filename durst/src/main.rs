@@ -4,7 +4,9 @@ mod config;
 mod core;
 mod dbus;
 mod effects;
+mod logind;
 mod ui;
+mod wayland;
 
 use std::path::PathBuf;
 

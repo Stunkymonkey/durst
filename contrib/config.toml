@@ -17,7 +17,7 @@ sort_by_urgency = true
 newest_first = false
 # merge identical notifications into one with a counter
 stack_duplicates = true
-# "focused" (the stack stays on that output until it is empty) or "name:<output>"
+# "focused" (the stack stays on that output until it is empty), "all" or "name:<output>"
 output = "focused"
 # command to open links, the URL is appended
 browser = ["xdg-open"]
@@ -25,6 +25,8 @@ browser = ["xdg-open"]
 # icon_theme = "Adwaita"
 # use the urgency's timeout even if the sender asks for another one
 ignore_dbus_timeout = false
+# timeouts pause after this long without input (and while the session is locked); 0 = never
+idle_threshold = "2m"
 
 [history]
 # how many closed notifications are kept for `durstctl history`, 0 = none
@@ -80,13 +82,15 @@ play_hints = true
 #
 # matchers: app_name summary body icon category desktop_entry stack_tag
 #           (each also as not_<name>), urgency, not_urgency, transient,
-#           has_actions, mode, not_mode
+#           has_actions, mode, not_mode, fullscreen_active
 # content:  set_summary set_body (templates with {app_name} {summary} {body}
 #           {category} {urgency}), hide_body, set_urgency, set_category,
 #           set_stack_tag, set_icon, set_transient
 # display:  style (like [style]), default_icon, icon_position (left|right|off),
 #           timeout
-# routing:  skip_display (history only), history_ignore, defer (hold back)
+# routing:  skip_display (history only), history_ignore, defer (hold back),
+#           fullscreen = show | delay (hold back the ones arriving during
+#           fullscreen) | pushback (hide all while a window is fullscreen)
 # actions:  default_action (for do_action), auto_invoke
 # effects:  script (command list, DURST_* env vars) with script_on
 #           (receive|action|close), sound (file or theme name), mute_sound
@@ -99,6 +103,11 @@ name = "dnd"
 mode = "dnd"
 not_urgency = "critical"
 defer = true
+
+# keep games and videos undisturbed, except for critical notifications
+# [[rule]]
+# not_urgency = "critical"
+# fullscreen = "delay"
 
 # no message contents on screen
 # [[rule]]

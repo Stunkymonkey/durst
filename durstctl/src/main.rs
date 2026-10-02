@@ -102,6 +102,10 @@ async fn run(command: Cmd) -> zbus::Result<()> {
                 println!("held:      {}", info.held);
                 println!("history:   {}", info.history);
                 println!("modes:     {}", info.modes.join(" "));
+                println!("idle:      {}", info.idle);
+                println!("locked:    {}", info.locked);
+                println!("fullscreen: {}", info.fullscreen);
+                println!("outputs:   {}", info.outputs.join(" "));
             }
         }
     }

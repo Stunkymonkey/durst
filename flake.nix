@@ -31,6 +31,7 @@
             # scripts/visual
             sway
             grim
+            foot
             libnotify
             (python3.withPackages (ps: [ ps.pillow ]))
           ];
