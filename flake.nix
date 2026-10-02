@@ -53,8 +53,10 @@
             pkg-config
             makeWrapper
             installShellFiles
+            # pipewire-rs generates its bindings with bindgen
+            rustPlatform.bindgenHook
           ];
-          buildInputs = runtimeLibs;
+          buildInputs = runtimeLibs ++ [ pipewire ];
 
           # build.rs writes completions and man pages into */scripts
           postInstall = ''
@@ -94,15 +96,17 @@
             rustfmt
             clippy
             cargo-outdated
+            rustPlatform.bindgenHook
 
-            # scripts/visual
+            # scripts/visual (pipewire: a private instance for the volume tests)
             sway
             grim
             foot
             libnotify
+            pipewire
             (python3.withPackages (ps: [ ps.pillow ]))
           ];
-          buildInputs = runtimeLibs;
+          buildInputs = runtimeLibs ++ [ pipewire ];
           LD_LIBRARY_PATH = "${lib.makeLibraryPath buildInputs}";
         };
       }
