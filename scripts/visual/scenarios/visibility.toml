@@ -1,0 +1,19 @@
+[[rule]]
+summary = "^Skipped$"
+skip_display = true
+
+[[rule]]
+summary = "^No history$"
+history_ignore = true
+
+[[rule]]
+summary = "^Quick$"
+timeout = "300ms"
+
+[[rule]]
+summary = "^Auto$"
+auto_invoke = "go"
+
+[[rule]]
+summary = "^Middle$"
+default_action = "second"

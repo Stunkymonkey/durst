@@ -29,6 +29,16 @@ pub enum Command {
     HistoryClear,
     Reload,
     Info,
+    Modes(ModeChange),
+    KnownModes,
+}
+
+#[derive(Debug, Clone)]
+pub enum ModeChange {
+    Set(Vec<String>),
+    Enable(String),
+    Disable(String),
+    Toggle(String),
 }
 
 #[derive(Debug)]
@@ -37,6 +47,7 @@ pub enum Reply {
     Id(u32),
     Notifications(Vec<NotificationInfo>),
     Info(DaemonInfo),
+    Modes(Vec<String>),
     NotFound(String),
     InvalidConfig(String),
 }
@@ -59,12 +70,14 @@ impl std::fmt::Debug for Responder {
     }
 }
 
-/// Counts published as properties.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// State published as properties.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Status {
     pub displayed: u32,
     pub waiting: u32,
+    pub held: u32,
     pub history: u32,
+    pub modes: Vec<String>,
 }
 
 #[derive(Debug, zbus::DBusError)]
@@ -104,6 +117,13 @@ impl Control {
 
     async fn done(&self, command: Command) -> Result<(), Error> {
         self.request(command).await.map(|_| ())
+    }
+
+    async fn modes(&self, command: Command) -> Result<Vec<String>, Error> {
+        match self.request(command).await? {
+            Reply::Modes(modes) => Ok(modes),
+            reply => Err(unexpected(reply)),
+        }
     }
 
     async fn notifications(&self, command: Command) -> Result<Vec<NotificationInfo>, Error> {
@@ -162,6 +182,36 @@ impl Control {
         }
     }
 
+    async fn set_modes(&self, modes: Vec<String>) -> Result<Vec<String>, Error> {
+        self.modes(Command::Modes(ModeChange::Set(modes))).await
+    }
+
+    async fn enable_mode(&self, mode: String) -> Result<Vec<String>, Error> {
+        self.modes(Command::Modes(ModeChange::Enable(mode))).await
+    }
+
+    async fn disable_mode(&self, mode: String) -> Result<Vec<String>, Error> {
+        self.modes(Command::Modes(ModeChange::Disable(mode))).await
+    }
+
+    async fn toggle_mode(&self, mode: String) -> Result<Vec<String>, Error> {
+        self.modes(Command::Modes(ModeChange::Toggle(mode))).await
+    }
+
+    async fn known_modes(&self) -> Result<Vec<String>, Error> {
+        self.modes(Command::KnownModes).await
+    }
+
+    #[zbus(property)]
+    fn active_modes(&self) -> Vec<String> {
+        self.status.lock().unwrap().modes.clone()
+    }
+
+    #[zbus(property)]
+    fn held_count(&self) -> u32 {
+        self.status.lock().unwrap().held
+    }
+
     #[zbus(property)]
     fn displayed_count(&self) -> u32 {
         self.status.lock().unwrap().displayed
@@ -193,8 +243,14 @@ pub async fn emit_status_changed(conn: Connection, old: Status, new: Status) {
         if old.waiting != new.waiting {
             control.waiting_count_changed(emitter).await?;
         }
+        if old.held != new.held {
+            control.held_count_changed(emitter).await?;
+        }
         if old.history != new.history {
             control.history_count_changed(emitter).await?;
+        }
+        if old.modes != new.modes {
+            control.active_modes_changed(emitter).await?;
         }
         Ok(())
     }

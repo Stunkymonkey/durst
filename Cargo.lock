@@ -882,6 +882,7 @@ dependencies = [
  "iced_layershell",
  "image",
  "log",
+ "regex",
  "serde",
  "tokio",
  "toml 1.1.6+spec-1.1.0",
