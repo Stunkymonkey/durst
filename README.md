@@ -44,6 +44,7 @@ durstctl notif list            # displayed and waiting notifications (--json)
 durstctl notif close [ID]      # default: the newest displayed one
 durstctl notif action [ID] [KEY]
 durstctl history pop           # show the last closed notification again
+durstctl mode toggle dnd       # modes switch rules on and off
 durstctl reload                # reload the config; errors keep the old one
 durstctl info
 ```
@@ -85,7 +86,7 @@ The detailed milestones are in [PLAN.md](PLAN.md#5-milestones).
  - [x] M0: zbus + single iced_layershell daemon, TOML config
  - [x] M1: full notification spec, stack layout, icons, markup, progress, actions, mouse bindings
  - [x] M2: `durstctl` + control interface, history
- - [ ] M3: rules & modes (DND)
+ - [x] M3: rules & modes (DND)
  - [ ] M4: idle pause, fullscreen policy, lock detection
  - [ ] M5: hot reload, systemd unit, D-Bus activation
  - [ ] M6: volume OSD (PipeWire)

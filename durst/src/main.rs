@@ -3,6 +3,7 @@ mod cli;
 mod config;
 mod core;
 mod dbus;
+mod effects;
 mod ui;
 
 use std::path::PathBuf;
