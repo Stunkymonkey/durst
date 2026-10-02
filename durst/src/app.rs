@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use durst_proto::control::{DaemonInfo, VolumeInfo};
+use durst_proto::control::{DaemonInfo, MediaInfo, VolumeInfo};
 use durst_proto::notifications::CloseReason;
 use iced::widget::text;
 use iced::{Color, Element, Subscription, Task, mouse, window};
@@ -24,6 +24,7 @@ use crate::config::{self, Anchor, Config, General, MouseAction, Output, Style};
 use crate::config_watch;
 use crate::core::history::History;
 use crate::core::layout::Margin;
+use crate::core::media::{Players, Status as PlayStatus};
 use crate::core::notification::{Notification, Urgency};
 use crate::core::rules::{self, Context, Fullscreen, IconPosition, Outcome, ScriptOn};
 use crate::core::store::{Insert, Store};
@@ -32,6 +33,8 @@ use crate::dbus::notifications::{emit_action_invoked, emit_closed};
 use crate::dbus::{self, Event};
 use crate::effects;
 use crate::logind;
+use crate::mpris;
+use crate::ui::cover;
 use crate::ui::icons::{self, Icon};
 use crate::ui::markup::{self, Run};
 use crate::ui::notification::{self as ui, Content};
@@ -60,6 +63,10 @@ pub enum Message {
     Osd(osd::Event),
     /// send the volume of a dragged slider
     FlushVolume,
+    Mpris(mpris::Event),
+    MediaOsd(osd::MediaEvent),
+    /// a cover finished loading (`None`: failed)
+    Cover(String, Option<iced::widget::image::Handle>),
     ConfigError(String),
 }
 
@@ -70,6 +77,7 @@ enum Key {
     More,
     /// the volume OSD, separate from the stack
     VolumeOsd,
+    MediaOsd,
 }
 
 /// One surface of a [`Key`]; with `output = "all"` there is one per output.
@@ -115,6 +123,16 @@ struct VolumeOsd {
     last_sent: Option<Instant>,
 }
 
+/// The media OSD while it is shown.
+struct MediaOsd {
+    /// hidden after this, unless hovered; `None`: stays
+    until: Option<Instant>,
+    hovered: bool,
+}
+
+/// Covers kept in memory, by URL; cleared when there are more.
+const COVER_CACHE: usize = 32;
+
 /// Where the config comes from, for reloading.
 #[derive(Debug, Clone)]
 pub struct ConfigSource {
@@ -146,6 +164,12 @@ pub struct App {
     audio: Option<audio::Handle>,
     volumes: HashMap<Target, Option<Volume>>,
     osd: Option<VolumeOsd>,
+    mpris: Option<mpris::Handle>,
+    players: Players,
+    media_osd: Option<MediaOsd>,
+    /// loaded covers by URL (`None`: failed); loading ones are absent
+    covers: HashMap<String, Option<iced::widget::image::Handle>>,
+    covers_loading: HashSet<String>,
     conn: Option<Connection>,
     /// state shared with the control interface, and the last published one
     status: Option<Arc<Mutex<Status>>>,
@@ -201,6 +225,11 @@ impl App {
             audio: None,
             volumes: HashMap::new(),
             osd: None,
+            mpris: None,
+            players: Players::default(),
+            media_osd: None,
+            covers: HashMap::new(),
+            covers_loading: HashSet::new(),
             conn: None,
             status: None,
             published: Status::default(),
@@ -220,15 +249,18 @@ impl App {
         let config =
             config_watch::subscription(self.source.path.clone()).map(|()| Message::ConfigChanged);
         let audio = audio::subscription().map(Message::Audio);
-        let tick = (self.store.next_deadline().is_some() || self.osd.is_some())
-            .then(|| iced::time::every(TICK).map(Message::Tick));
+        let media = mpris::subscription().map(Message::Mpris);
+        let tick = (self.store.next_deadline().is_some()
+            || self.osd.is_some()
+            || self.media_osd.is_some())
+        .then(|| iced::time::every(TICK).map(Message::Tick));
         let flush = self
             .osd
             .as_ref()
             .and_then(|o| o.pending)
             .map(|_| iced::time::every(SLIDER_RATE).map(|_| Message::FlushVolume));
         Subscription::batch(
-            [dbus, opened, wayland, locked, config, audio]
+            [dbus, opened, wayland, locked, config, audio, media]
                 .into_iter()
                 .chain(tick)
                 .chain(flush),
@@ -324,12 +356,68 @@ impl App {
                 self.flush_volume(true);
                 Task::none()
             }
+            Message::Mpris(mpris::Event::Ready(handle)) => {
+                self.mpris = Some(handle);
+                Task::none()
+            }
+            Message::Mpris(mpris::Event::Player {
+                name,
+                identity,
+                status,
+                track,
+                initial,
+            }) => {
+                let changed = self.players.update(&name, identity, status, track);
+                // players found at startup only set the scene
+                if changed && !initial && self.config.osd.media.show_on_track_change {
+                    self.show_media_osd();
+                }
+                self.load_cover()
+            }
+            Message::Mpris(mpris::Event::Gone(name)) => {
+                self.players.remove(&name);
+                if self.players.active().is_none() {
+                    self.media_osd = None;
+                }
+                self.load_cover()
+            }
+            Message::Cover(url, handle) => {
+                self.covers_loading.remove(&url);
+                if self.covers.len() >= COVER_CACHE {
+                    self.covers.clear();
+                }
+                self.covers.insert(url, handle);
+                Task::none()
+            }
+            Message::MediaOsd(event) => {
+                match event {
+                    osd::MediaEvent::Previous => self.media_action(mpris::Action::Previous),
+                    osd::MediaEvent::PlayPause => self.media_action(mpris::Action::PlayPause),
+                    osd::MediaEvent::Next => self.media_action(mpris::Action::Next),
+                    osd::MediaEvent::Hover(hovered) => {
+                        if let Some(osd) = &mut self.media_osd {
+                            osd.hovered = hovered;
+                        }
+                        if !hovered {
+                            self.show_media_osd();
+                        }
+                    }
+                }
+                Task::none()
+            }
             Message::Tick(now) => {
                 let hide = self.osd.as_ref().is_some_and(|o| {
                     !o.hovered && o.drag.is_none() && o.until.is_some_and(|t| t <= now)
                 });
                 if hide {
                     self.osd = None;
+                }
+                let hide_media = self
+                    .media_osd
+                    .as_ref()
+                    .is_some_and(|o| !o.hovered && o.until.is_some_and(|t| t <= now));
+                if hide_media {
+                    self.media_osd = None;
                 }
                 self.store
                     .update_timers(&self.config.general, now, self.idle || self.locked);
@@ -360,6 +448,13 @@ impl App {
                 self.store.waiting(&self.config.general),
                 self.config.style(Urgency::Normal),
             ),
+            Some(Key::MediaOsd) => {
+                let Some(content) = self.media_content() else {
+                    return text("").into();
+                };
+                return osd::media_view(content, self.config.style(Urgency::Normal))
+                    .map(Message::MediaOsd);
+            }
             Some(Key::VolumeOsd) => {
                 let Some(content) = self.osd_content() else {
                     return text("").into();
@@ -747,6 +842,17 @@ impl App {
             let margin = crate::core::layout::stack_margins(&place, &[height])[0];
             placed.push((Key::VolumeOsd, (osd.width, height), margin, osd.anchor));
         }
+        if let Some(content) = self.media_content() {
+            let osd = &self.config.osd.media;
+            let height = osd::media_height(&content, self.config.style(Urgency::Normal));
+            let place = General {
+                anchor: osd.anchor,
+                offset: osd.offset,
+                ..general.clone()
+            };
+            let margin = crate::core::layout::stack_margins(&place, &[height])[0];
+            placed.push((Key::MediaOsd, (osd.width, height), margin, osd.anchor));
+        }
         let wanted: Vec<(SurfaceKey, (u32, u32), Margin, Anchor)> = placed
             .into_iter()
             .flat_map(|(key, size, margin, anchor)| {
@@ -1022,6 +1128,38 @@ impl App {
                 }
                 Err(reply) => (reply, Task::none()),
             },
+            Command::MediaStatus => match self.media_info() {
+                Ok(info) => (Reply::Media(info), Task::none()),
+                Err(reply) => (reply, Task::none()),
+            },
+            Command::MediaAction(action) => {
+                let info = match self.media_info() {
+                    Ok(info) => info,
+                    Err(reply) => return (reply, Task::none()),
+                };
+                let action = match action.as_str() {
+                    "play" => mpris::Action::Play,
+                    "pause" => mpris::Action::Pause,
+                    "toggle" => mpris::Action::PlayPause,
+                    "next" => mpris::Action::Next,
+                    "prev" | "previous" => mpris::Action::Previous,
+                    _ => {
+                        let msg = format!(
+                            "invalid media action {action:?}: play, pause, toggle, next or prev"
+                        );
+                        return (Reply::InvalidArgument(msg), Task::none());
+                    }
+                };
+                self.media_action(action);
+                (Reply::Media(info), Task::none())
+            }
+            Command::ShowMediaOsd => match self.media_info() {
+                Ok(_) => {
+                    self.show_media_osd();
+                    (Reply::Done, Task::none())
+                }
+                Err(reply) => (reply, Task::none()),
+            },
             Command::KnownModes => {
                 let known: BTreeSet<String> = self
                     .config
@@ -1033,6 +1171,74 @@ impl App {
                 (Reply::Modes(known.into_iter().collect()), Task::none())
             }
         }
+    }
+
+    fn media_info(&self) -> Result<MediaInfo, Reply> {
+        let player = self
+            .players
+            .active()
+            .ok_or_else(|| Reply::NotFound("no media player".into()))?;
+        let track = &player.track;
+        Ok(MediaInfo {
+            player: player.identity.clone(),
+            status: player.status.name().into(),
+            title: track.title.clone(),
+            artist: track.artist.clone(),
+            album: track.album.clone(),
+        })
+    }
+
+    fn media_content(&self) -> Option<osd::MediaContent<'_>> {
+        self.media_osd.as_ref()?;
+        let player = self.players.active()?;
+        let track = &player.track;
+        Some(osd::MediaContent {
+            title: if track.title.is_empty() {
+                &player.identity
+            } else {
+                &track.title
+            },
+            artist: &track.artist,
+            playing: player.status == PlayStatus::Playing,
+            cover: track
+                .art_url
+                .as_ref()
+                .and_then(|url| self.covers.get(url))
+                .and_then(Option::as_ref),
+            cover_size: self.config.osd.media.cover_size,
+        })
+    }
+
+    fn show_media_osd(&mut self) {
+        let config = &self.config.osd.media;
+        if !config.enabled || self.players.active().is_none() {
+            return;
+        }
+        let until = config.timeout.0.map(|t| Instant::now() + t);
+        let hovered = self.media_osd.as_ref().is_some_and(|o| o.hovered);
+        self.media_osd = Some(MediaOsd { until, hovered });
+    }
+
+    fn media_action(&mut self, action: mpris::Action) {
+        let (Some(player), Some(mpris)) = (self.players.active(), &self.mpris) else {
+            return;
+        };
+        mpris.send(&player.name, action);
+        self.show_media_osd();
+    }
+
+    /// Starts loading the active track's cover unless it is known already.
+    fn load_cover(&mut self) -> Task<Message> {
+        let Some(url) = self.players.active().and_then(|p| p.track.art_url.clone()) else {
+            return Task::none();
+        };
+        if self.covers.contains_key(&url) || !self.covers_loading.insert(url.clone()) {
+            return Task::none();
+        }
+        let size = self.config.osd.media.cover_size;
+        Task::perform(cover::load(url.clone(), size), move |handle| {
+            Message::Cover(url.clone(), handle)
+        })
     }
 
     fn volume_info(&self, mic: bool) -> Result<VolumeInfo, Reply> {

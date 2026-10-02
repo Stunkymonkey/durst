@@ -45,7 +45,7 @@ pub fn resolve(n: &Notification, size: u32, theme: Option<&str>) -> Option<Icon>
 /// scaled images in image space and truncates to whole pixels there, which
 /// moves upscaled images by up to the scale factor (a 2x2 icon drawn at 48px
 /// lands 24px off). Scaling once here also avoids rescaling every frame.
-fn scaled(img: RgbaImage, size: u32) -> Handle {
+pub(crate) fn scaled(img: RgbaImage, size: u32) -> Handle {
     let (w, h) = img.dimensions();
     let scale = size as f32 / w.max(h).max(1) as f32;
     let (sw, sh) = (

@@ -133,6 +133,38 @@ impl Default for General {
 #[serde(default, deny_unknown_fields)]
 pub struct Osd {
     pub volume: VolumeOsd,
+    pub media: MediaOsd,
+}
+
+/// The on-screen display for the media player: cover, title, artist and
+/// buttons; it uses the normal urgency's style.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub struct MediaOsd {
+    pub enabled: bool,
+    pub anchor: Anchor,
+    /// distance from the anchored screen edges: [x, y]
+    pub offset: [i32; 2],
+    pub width: u32,
+    pub cover_size: u32,
+    /// hidden after this long, unless the pointer is over it
+    pub timeout: Timeout,
+    /// show it when the playing track changes
+    pub show_on_track_change: bool,
+}
+
+impl Default for MediaOsd {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            anchor: Anchor::Top,
+            offset: [0, 20],
+            width: 420,
+            cover_size: 72,
+            timeout: Timeout(Some(Duration::from_secs(4))),
+            show_on_track_change: true,
+        }
+    }
 }
 
 /// The on-screen display for speaker and microphone volume; it uses the
