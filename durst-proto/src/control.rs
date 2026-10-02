@@ -65,6 +65,18 @@ pub struct VolumeInfo {
     pub description: String,
 }
 
+/// The media player `durstctl media` acts on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct MediaInfo {
+    /// e.g. "Spotify"
+    pub player: String,
+    /// "playing", "paused" or "stopped"
+    pub status: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+}
+
 #[zbus::proxy(
     interface = "org.durst_notification.Durst1",
     default_service = "org.durst_notification.Durst",
@@ -120,6 +132,15 @@ pub trait Durst {
     fn set_mute(&self, mic: bool, state: &str) -> zbus::Result<VolumeInfo>;
 
     fn show_volume_osd(&self, mic: bool) -> zbus::Result<()>;
+
+    /// the player that most recently started playing, else the last active
+    fn media_status(&self) -> zbus::Result<MediaInfo>;
+
+    /// `action`: "play", "pause", "toggle", "next" or "prev", on the player
+    /// of `media_status`; shows the media OSD
+    fn media_action(&self, action: &str) -> zbus::Result<MediaInfo>;
+
+    fn show_media_osd(&self) -> zbus::Result<()>;
 
     #[zbus(property)]
     fn active_modes(&self) -> zbus::Result<Vec<String>>;

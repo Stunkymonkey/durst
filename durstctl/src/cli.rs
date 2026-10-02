@@ -25,6 +25,9 @@ pub enum Cmd {
     /// Speaker and microphone volume (shows the volume OSD)
     #[command(subcommand)]
     Volume(VolumeCmd),
+    /// The media player that most recently started playing
+    #[command(subcommand)]
+    Media(MediaCmd),
     /// On-screen displays
     #[command(subcommand)]
     Osd(OsdCmd),
@@ -122,10 +125,25 @@ pub enum VolumeCmd {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum MediaCmd {
+    /// Player, status, title, artist
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    Play,
+    Pause,
+    /// Play or pause
+    Toggle,
+    Next,
+    Prev,
+}
+
+#[derive(Subcommand, Debug)]
 pub enum OsdCmd {
-    /// Show an OSD: volume or mic
+    /// Show an OSD: volume, mic or media
     Show {
-        #[arg(value_parser = ["volume", "mic"])]
+        #[arg(value_parser = ["volume", "mic", "media"])]
         kind: String,
     },
 }

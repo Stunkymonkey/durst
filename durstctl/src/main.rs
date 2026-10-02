@@ -3,9 +3,9 @@ mod cli;
 use std::process::ExitCode;
 
 use clap::Parser;
-use durst_proto::control::{DurstProxy, NotificationInfo, VolumeInfo, error};
+use durst_proto::control::{DurstProxy, MediaInfo, NotificationInfo, VolumeInfo, error};
 
-use cli::{Cli, Cmd, HistoryCmd, ModeCmd, NotifCmd, OsdCmd, VolumeCmd};
+use cli::{Cli, Cmd, HistoryCmd, MediaCmd, ModeCmd, NotifCmd, OsdCmd, VolumeCmd};
 
 /// Exit codes, see the help text in cli.rs.
 const NOT_RUNNING: u8 = 1;
@@ -104,6 +104,19 @@ async fn run(command: Cmd) -> zbus::Result<()> {
         Cmd::Volume(VolumeCmd::Mute { state, mic }) => {
             print_volume(&durst.set_mute(mic, &state).await?, false)
         }
+        Cmd::Media(MediaCmd::Status { json }) => print_media(&durst.media_status().await?, json),
+        Cmd::Media(action) => {
+            let action = match action {
+                MediaCmd::Play => "play",
+                MediaCmd::Pause => "pause",
+                MediaCmd::Toggle => "toggle",
+                MediaCmd::Next => "next",
+                MediaCmd::Prev => "prev",
+                MediaCmd::Status { .. } => unreachable!(),
+            };
+            durst.media_action(action).await?;
+        }
+        Cmd::Osd(OsdCmd::Show { kind }) if kind == "media" => durst.show_media_osd().await?,
         Cmd::Osd(OsdCmd::Show { kind }) => durst.show_volume_osd(kind == "mic").await?,
         Cmd::Reload => durst.reload().await?,
         Cmd::Info { json } => {
@@ -135,6 +148,20 @@ fn print_volume(v: &VolumeInfo, json: bool) {
         println!("{} muted  {}", v.percent, v.description);
     } else {
         println!("{}  {}", v.percent, v.description);
+    }
+}
+
+fn print_media(m: &MediaInfo, json: bool) {
+    if json {
+        println!("{}", serde_json::to_string_pretty(m).unwrap());
+    } else {
+        println!("{} ({})", m.player, m.status);
+        if !m.title.is_empty() {
+            println!("{}", m.title);
+        }
+        if !m.artist.is_empty() {
+            println!("{}", m.artist);
+        }
     }
 }
 

@@ -6,7 +6,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use durst_proto::control::{DaemonInfo, NotificationInfo, OBJECT_PATH, VolumeInfo};
+use durst_proto::control::{DaemonInfo, MediaInfo, NotificationInfo, OBJECT_PATH, VolumeInfo};
 use futures::SinkExt;
 use futures::channel::mpsc::Sender;
 use futures::channel::oneshot;
@@ -36,6 +36,9 @@ pub enum Command {
     SetVolume(bool, String),
     SetMute(bool, String),
     ShowVolumeOsd(bool),
+    MediaStatus,
+    MediaAction(String),
+    ShowMediaOsd,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +57,7 @@ pub enum Reply {
     Info(DaemonInfo),
     Modes(Vec<String>),
     Volume(VolumeInfo),
+    Media(MediaInfo),
     NotFound(String),
     InvalidConfig(String),
     InvalidArgument(String),
@@ -131,6 +135,13 @@ impl Control {
     async fn modes(&self, command: Command) -> Result<Vec<String>, Error> {
         match self.request(command).await? {
             Reply::Modes(modes) => Ok(modes),
+            reply => Err(unexpected(reply)),
+        }
+    }
+
+    async fn media_reply(&self, command: Command) -> Result<MediaInfo, Error> {
+        match self.request(command).await? {
+            Reply::Media(media) => Ok(media),
             reply => Err(unexpected(reply)),
         }
     }
@@ -232,6 +243,18 @@ impl Control {
 
     async fn show_volume_osd(&self, mic: bool) -> Result<(), Error> {
         self.done(Command::ShowVolumeOsd(mic)).await
+    }
+
+    async fn media_status(&self) -> Result<MediaInfo, Error> {
+        self.media_reply(Command::MediaStatus).await
+    }
+
+    async fn media_action(&self, action: String) -> Result<MediaInfo, Error> {
+        self.media_reply(Command::MediaAction(action)).await
+    }
+
+    async fn show_media_osd(&self) -> Result<(), Error> {
+        self.done(Command::ShowMediaOsd).await
     }
 
     #[zbus(property)]

@@ -2,8 +2,8 @@
 
 A Wayland notification daemon written in Rust, inspired by
 [dunst](https://dunst-project.org). Everything can be controlled with the
-mouse and with the `durstctl` CLI, and it has a volume OSD; a media OSD is
-planned, see [PLAN.md](PLAN.md) for the design and the roadmap.
+mouse and with the `durstctl` CLI, and it has OSDs for the volume and the
+media player. [PLAN.md](PLAN.md) has the design and the roadmap.
 
 - the full [notification spec](https://specifications.freedesktop.org/notification-spec/latest/):
   actions, body markup and links, icons and images, progress bars, sounds
@@ -16,6 +16,8 @@ planned, see [PLAN.md](PLAN.md) for the design and the roadmap.
 - a TOML config that reloads itself and reports mistakes as a notification
 - a volume OSD for speakers and microphone (PipeWire): slider, scrolling,
   mute; shown on `durstctl volume ...` and when other programs change it
+- a media OSD (MPRIS): cover, title, artist, previous / play-pause / next;
+  shown when the song changes and on `durstctl media ...`
 
 Wayland only; the compositor needs wlr-layer-shell (sway, Hyprland, niri,
 river, labwc, ...).
@@ -56,6 +58,9 @@ bindsym XF86AudioRaiseVolume exec durstctl volume up
 bindsym XF86AudioLowerVolume exec durstctl volume down
 bindsym XF86AudioMute exec durstctl volume mute
 bindsym XF86AudioMicMute exec durstctl volume mute --mic
+bindsym XF86AudioPlay exec durstctl media toggle
+bindsym XF86AudioNext exec durstctl media next
+bindsym XF86AudioPrev exec durstctl media prev
 ```
 
 - **systemd:** `systemctl --user enable --now durst.service` (bound to
@@ -112,6 +117,7 @@ durstctl notif action [ID] [KEY]
 durstctl history pop           # show the last closed notification again
 durstctl mode toggle dnd       # modes switch rules on and off
 durstctl volume up             # or down, set 50, set +5, mute toggle; --mic for the microphone
+durstctl media toggle          # or play, pause, next, prev, status
 durstctl reload                # reload the config; errors keep the old one
 durstctl info                  # state: counts, modes, idle, locked, outputs
 ```
@@ -129,7 +135,7 @@ properties for the counts and the active modes.
 - [org.freedesktop.Notifications](https://specifications.freedesktop.org/notification-spec/latest/) (served): receive notifications
 - `org.durst_notification.Durst1` (served): control interface used by `durstctl`
 - [org.freedesktop.login1](https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.login1.html) (client): session lock state via `LockedHint`
-- [org.mpris.MediaPlayer2](https://specifications.freedesktop.org/mpris-spec/latest/) (client, planned): media player control
+- [org.mpris.MediaPlayer2](https://specifications.freedesktop.org/mpris-spec/latest/) (client): media player control
 
 ### Wayland protocols
 
@@ -164,7 +170,10 @@ evaluates assertions on the measurement, `signals` lists the emitted D-Bus
 signals, `snap`/`geom`/`pixel` inspect the screen mid-scenario, and a
 `<scenario>.toml` next to it is used as durst's config. Header lines select
 several outputs (`# outputs: 2`) or D-Bus activation (`# activation`). Mouse
-input goes through `tools/vpointer`, a virtual pointer inside the sandbox.
+input goes through `tools/vpointer`, a virtual pointer inside the sandbox;
+`tools/fake-logind` and `tools/fake-player` stand in for logind and media
+players, and a private PipeWire (`scripts/visual/pipewire.conf`) for the
+audio system.
 The running session, its notification daemon and the screen are not affected.
 
 ```sh
@@ -191,4 +200,4 @@ The detailed milestones are in [PLAN.md](PLAN.md#5-milestones).
  - [x] M4: idle pause, fullscreen policy, lock detection, output = "all"
  - [x] M5: hot reload, systemd unit, D-Bus activation, package
  - [x] M6: volume OSD (PipeWire)
- - [ ] M7: media OSD (MPRIS)
+ - [x] M7: media OSD (MPRIS)

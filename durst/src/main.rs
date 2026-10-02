@@ -7,6 +7,7 @@ mod core;
 mod dbus;
 mod effects;
 mod logind;
+mod mpris;
 mod ui;
 mod wayland;
 

@@ -30,6 +30,11 @@
 #                       from the private PipeWire itself
 #   pw_set NODE PERCENT change a volume like another program would
 #   press X Y / release mouse button held down, e.g. to drag
+#   player_start NAME   a fake MPRIS player org.mpris.MediaPlayer2.NAME;
+#   player NAME CMD     send it "status Playing" or "track ID|TITLE|ARTIST|URL";
+#   player_calls NAME   the methods called on it so far, one line
+#   player_stop NAME    and gone again
+#   serve DIR           serve DIR over HTTP on 127.0.0.1, prints the base URL
 #   fullscreen_window   open a black window and make it fullscreen;
 #   leave_fullscreen    and close it again (it would disturb measurements)
 # A line `# outputs: N` in the scenario gives sway N outputs side by side
@@ -228,6 +233,33 @@ pw_set() {
     linear=$(python3 -c "print(($2 / 100) ** 3)")
     pw-cli set-param "$id" Props "{ channelVolumes: [ $linear, $linear ] }" >/dev/null
     sleep 0.3
+}
+declare -A player_fds player_pids
+player_start() {
+    mkfifo "$work/player-$1"
+    "$root/target/debug/fake-player" "$1" <"$work/player-$1" >"$work/player-$1.calls" 2>>"$log/players.log" &
+    player_pids[$1]=$!
+    local fd
+    exec {fd}>"$work/player-$1"
+    player_fds[$1]=$fd
+    wait_for busctl --user status "org.mpris.MediaPlayer2.$1"
+    sleep 0.3
+}
+player() {
+    local name=$1
+    shift
+    echo "$*" >&"${player_fds[$name]}"
+    sleep 0.3
+}
+player_calls() { paste -sd' ' "$work/player-$1.calls"; }
+player_stop() {
+    kill "${player_pids[$1]}"
+    sleep 0.3
+}
+serve() {
+    python3 -u -m http.server --bind 127.0.0.1 --directory "$1" 0 >"$work/http.log" 2>&1 &
+    wait_for grep -q 'port' "$work/http.log"
+    echo "http://127.0.0.1:$(sed -nE 's/.*port ([0-9]+).*/\1/p' "$work/http.log" | head -1)"
 }
 pointer() {
     printf 'move %s %s\n' "$1" "$2" >&3
