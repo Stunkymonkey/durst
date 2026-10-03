@@ -9,6 +9,9 @@ pub const OBJECT_PATH: &str = "/org/durst_notification/Durst";
 pub const INTERFACE: &str = "org.durst_notification.Durst1";
 
 /// Error names returned by the daemon, `org.durst_notification.Error.<name>`.
+/// The property with the daemon's [`crate::INTERFACE_HASH`].
+pub const INTERFACE_HASH_PROPERTY: &str = "InterfaceHash";
+
 pub mod error {
     /// there is nothing to act on, e.g. no notification or empty history
     pub const NOT_FOUND: &str = "org.durst_notification.Error.NotFound";
@@ -146,6 +149,10 @@ pub trait Durst {
 
     #[zbus(property)]
     fn active_modes(&self) -> zbus::Result<Vec<String>>;
+
+    /// the daemon's [`crate::INTERFACE_HASH`]; missing in durst built before it
+    #[zbus(property)]
+    fn interface_hash(&self) -> zbus::Result<String>;
 
     #[zbus(property)]
     fn displayed_count(&self) -> zbus::Result<u32>;
