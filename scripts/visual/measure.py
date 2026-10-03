@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Find the notification boxes in a screenshot and print their geometry.
 
-The background colour is taken from the top-left pixel. Boxes are the
-connected regions of non-background pixels, which works as long as
-notifications don't touch each other (gap > 0).
+The background colour is the most common colour along the image's edges
+(a single pixel could be a window's text cursor). Boxes are the connected
+regions of non-background pixels, which works as long as notifications don't
+touch each other (gap > 0).
 
 Output (JSON): {"size": [w, h], "boxes": [{"x","y","w","h","pad"}...], "gaps": [...]}
 Boxes are sorted top to bottom, then left to right; `gaps` holds the vertical
@@ -14,6 +15,7 @@ smaller than the top pad.
 """
 import json
 import sys
+from collections import Counter
 
 from PIL import Image
 
@@ -22,7 +24,9 @@ def main(path, tolerance=8):
     img = Image.open(path).convert("RGB")
     w, h = img.size
     px = img.load()
-    bg = px[0, 0]
+    edges = [px[x, y] for x in range(w) for y in (0, h - 1)]
+    edges += [px[x, y] for y in range(h) for x in (0, w - 1)]
+    bg = Counter(edges).most_common(1)[0][0]
 
     def is_fg(x, y):
         p = px[x, y]

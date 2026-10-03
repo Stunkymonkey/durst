@@ -53,6 +53,8 @@ pub struct DaemonInfo {
     /// a focused window is fullscreen
     pub fullscreen: bool,
     pub outputs: Vec<String>,
+    /// the output of the focused window, "" if unknown
+    pub focused_output: String,
 }
 
 /// Volume of the default sink or source.

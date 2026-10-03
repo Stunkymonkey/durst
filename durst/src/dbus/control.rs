@@ -54,7 +54,7 @@ pub enum Reply {
     Done,
     Id(u32),
     Notifications(Vec<NotificationInfo>),
-    Info(DaemonInfo),
+    Info(Box<DaemonInfo>),
     Modes(Vec<String>),
     Volume(VolumeInfo),
     Media(MediaInfo),
@@ -204,7 +204,7 @@ impl Control {
 
     async fn info(&self) -> Result<DaemonInfo, Error> {
         match self.request(Command::Info).await? {
-            Reply::Info(info) => Ok(info),
+            Reply::Info(info) => Ok(*info),
             reply => Err(unexpected(reply)),
         }
     }

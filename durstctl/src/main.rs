@@ -135,6 +135,7 @@ async fn run(command: Cmd) -> zbus::Result<()> {
                 println!("locked:    {}", info.locked);
                 println!("fullscreen: {}", info.fullscreen);
                 println!("outputs:   {}", info.outputs.join(" "));
+                println!("focused output: {}", info.focused_output);
             }
         }
     }
