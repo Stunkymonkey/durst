@@ -15,6 +15,13 @@ use crate::core::media::{Status, Track};
 
 const PREFIX: &str = "org.mpris.MediaPlayer2.";
 
+/// A player's bus name. playerctld is left out: it is a proxy that mirrors
+/// the most recent other player, which durst already follows itself.
+fn is_player(name: &str) -> bool {
+    name.strip_prefix(PREFIX)
+        .is_some_and(|player| player != "playerctld")
+}
+
 #[zbus::proxy(
     interface = "org.mpris.MediaPlayer2",
     default_path = "/org/mpris/MediaPlayer2"
@@ -151,7 +158,7 @@ async fn watch(output: &mut futures::channel::mpsc::Sender<Event>) -> zbus::Resu
     // the property streams of each player, stopped when it goes away
     let mut streams: HashMap<String, AbortHandle> = HashMap::new();
     for name in dbus.list_names().await? {
-        if name.starts_with(PREFIX) {
+        if is_player(&name) {
             add_player(
                 &conn,
                 name.to_string(),
@@ -169,7 +176,7 @@ async fn watch(output: &mut futures::channel::mpsc::Sender<Event>) -> zbus::Resu
             Some(change) = owners.next() => {
                 let Ok(args) = change.args() else { continue };
                 let name = args.name().to_string();
-                if !name.starts_with(PREFIX) {
+                if !is_player(&name) {
                     continue;
                 }
                 if let Some(handle) = streams.remove(&name) {
@@ -303,6 +310,14 @@ mod tests {
             .into_iter()
             .map(|(k, v)| (k.to_owned(), v.try_to_owned().unwrap()))
             .collect()
+    }
+
+    #[test]
+    fn playerctld_is_not_a_player() {
+        assert!(is_player("org.mpris.MediaPlayer2.rhythmbox"));
+        assert!(is_player("org.mpris.MediaPlayer2.firefox.instance_1_42"));
+        assert!(!is_player("org.mpris.MediaPlayer2.playerctld"));
+        assert!(!is_player("org.freedesktop.Notifications"));
     }
 
     #[test]

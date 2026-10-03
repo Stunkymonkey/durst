@@ -309,10 +309,13 @@ Notes on deviations, per milestone:
   triggered the next one; `LastOutput` turned out to be "durst's last
   clicked surface, else the first output", replaced by the focused window's
   output (R4).
+- **Real players (2026-10-04):** playerctld (a proxy that mirrors the most
+  recent player) was followed as a player of its own, so commands went
+  through it; it is ignored now.
 
 ## 6. Testing
 
-- **Unit (61 tests):** core logic with injected time (timers, sorting,
+- **Unit (62 tests):** core logic with injected time (timers, sorting,
   duplicates, stack tags, held entries, history, rules, modes, media players,
   layout), config parsing and errors, markup, hint and metadata parsing, pod
   encoding, sound and cover helpers.
@@ -347,8 +350,10 @@ Notes on deviations, per milestone:
 
 ### Not verified on real systems
 
-2. **Real media players** (Spotify, Firefox, mpv): only the fake player is
-   tested.
+2. **Real media players:** Rhythmbox verified (2026-10-04: status, title,
+   play/pause/toggle/next/prev through `durstctl media`, matching the
+   player's own `PlaybackStatus`). Not yet: Firefox, Spotify (not
+   installed), mpv (needs the mpv-mpris plugin).
 3. **Other compositors** (Hyprland, niri, river): only sway is tested.
 4. **HiDPI** output scaling (layout and R7).
 5. **Remote Nix builder:** the package build fails on the configured remote
@@ -381,6 +386,6 @@ Notes on deviations, per milestone:
 
 1. Finish the daily-driver test, fix what comes up (each fix with a
    scenario).
-2. Verify item 2 (real media players) on the real system.
+2. Finish item 2 with Firefox (and mpv with mpv-mpris, if used).
 3. Item 12 (per-rule anchor/output) if wanted.
 4. PR to `master` of durst-notification/durst (conflicts in 5 files).
