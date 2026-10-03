@@ -123,7 +123,7 @@ durstctl info                  # state: counts, modes, idle, locked, outputs
 ```
 
 Exit codes: 0 ok, 1 durst not running, 2 invalid arguments, 3 nothing to act
-on, 4 invalid config. Everything is also available on the session bus as
+on, 4 invalid config, 5 the running durst is from another version (restart it). Everything is also available on the session bus as
 `org.durst_notification.Durst1` (e.g. `busctl --user introspect
 org.durst_notification.Durst /org/durst_notification/Durst`), including
 properties for the counts and the active modes.

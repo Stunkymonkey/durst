@@ -258,6 +258,11 @@ impl Control {
     }
 
     #[zbus(property)]
+    fn interface_hash(&self) -> &str {
+        durst_proto::INTERFACE_HASH
+    }
+
+    #[zbus(property)]
     fn active_modes(&self) -> Vec<String> {
         self.status.lock().unwrap().modes.clone()
     }

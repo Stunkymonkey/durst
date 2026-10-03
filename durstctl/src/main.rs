@@ -3,7 +3,11 @@ mod cli;
 use std::process::ExitCode;
 
 use clap::Parser;
-use durst_proto::control::{DurstProxy, MediaInfo, NotificationInfo, VolumeInfo, error};
+use durst_proto::INTERFACE_HASH;
+use durst_proto::control::{
+    BUS_NAME, DurstProxy, INTERFACE, INTERFACE_HASH_PROPERTY, MediaInfo, NotificationInfo,
+    OBJECT_PATH, VolumeInfo, error,
+};
 
 use cli::{Cli, Cmd, HistoryCmd, MediaCmd, ModeCmd, NotifCmd, OsdCmd, VolumeCmd};
 
@@ -12,6 +16,7 @@ const NOT_RUNNING: u8 = 1;
 const INVALID_ARGUMENT: u8 = 2;
 const NOT_FOUND: u8 = 3;
 const INVALID_CONFIG: u8 = 4;
+const MISMATCH: u8 = 5;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
@@ -19,11 +24,51 @@ async fn main() -> ExitCode {
     match run(cli.command).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            let (code, message) = describe(&e);
+            let (code, message) = match mismatch().await {
+                Some(message) => (MISMATCH, message),
+                None => describe(&e),
+            };
             eprintln!("durstctl: {message}");
             ExitCode::from(code)
         }
     }
+}
+
+/// After an error: is the running durst built from other interface
+/// definitions than durstctl? Then that is the actual problem, typically a
+/// daemon still running from before an update.
+async fn mismatch() -> Option<String> {
+    let conn = zbus::Connection::session().await.ok()?;
+    let properties = zbus::fdo::PropertiesProxy::builder(&conn)
+        .destination(BUS_NAME)
+        .ok()?
+        .path(OBJECT_PATH)
+        .ok()?
+        .build()
+        .await
+        .ok()?;
+    let interface = zbus::names::InterfaceName::try_from(INTERFACE).ok()?;
+    let theirs = match properties.get(interface, INTERFACE_HASH_PROPERTY).await {
+        Ok(value) => String::try_from(value).ok(),
+        // not running: no mismatch, the normal error says so
+        Err(zbus::fdo::Error::ServiceUnknown(_) | zbus::fdo::Error::NameHasNoOwner(_)) => {
+            return None;
+        }
+        // durst from before the fingerprint existed
+        Err(_) => None,
+    };
+    if theirs.as_deref() == Some(INTERFACE_HASH) {
+        return None;
+    }
+    Some(match theirs {
+        Some(theirs) => format!(
+            "the running durst speaks another interface version ({theirs}, durstctl: \
+             {INTERFACE_HASH}); restart durst, e.g. `systemctl --user restart durst`"
+        ),
+        None => "the running durst is older than durstctl; restart durst, e.g. \
+                 `systemctl --user restart durst`"
+            .into(),
+    })
 }
 
 fn describe(e: &zbus::Error) -> (u8, String) {

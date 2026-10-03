@@ -3,7 +3,8 @@ use clap::{Parser, Subcommand};
 /// Control the durst notification daemon.
 ///
 /// Exit codes: 0 ok, 1 durst is not running, 2 invalid arguments,
-/// 3 nothing to act on (or no audio device), 4 invalid config (on reload).
+/// 3 nothing to act on (or no audio device), 4 invalid config (on reload),
+/// 5 the running durst is from another version (restart it).
 #[derive(Parser, Debug)]
 #[command(name = "durstctl", version, author)]
 pub struct Cli {
