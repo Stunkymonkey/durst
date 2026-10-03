@@ -1,0 +1,7 @@
+[style]
+min_icon_size = 32
+max_icon_size = 64
+
+[[rule]]
+app_name = "^top$"
+icon_position = "top"

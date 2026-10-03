@@ -7,22 +7,91 @@ use ::image::imageops::{self, FilterType};
 use ::image::{DynamicImage, ImageReader, ImageResult, Limits, RgbaImage};
 use iced::widget::image::Handle;
 
+use crate::config::Style;
 use crate::core::notification::Notification;
 
+/// An icon and the size it is drawn at.
 #[derive(Debug, Clone)]
 pub enum Icon {
-    Svg(PathBuf),
-    Raster(Handle),
+    Svg {
+        path: PathBuf,
+        size: u32,
+    },
+    Raster {
+        handle: Handle,
+        width: u32,
+        height: u32,
+    },
+}
+
+impl Icon {
+    pub fn width(&self) -> u32 {
+        match self {
+            Icon::Svg { size, .. } => *size,
+            Icon::Raster { width, .. } => *width,
+        }
+    }
+
+    pub fn height(&self) -> u32 {
+        match self {
+            Icon::Svg { size, .. } => *size,
+            Icon::Raster { height, .. } => *height,
+        }
+    }
+}
+
+/// How big icons are drawn: raster images keep their own size within
+/// `min..=max`; SVGs, which have none, are drawn at `size`, which is also the
+/// size asked for from the icon theme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sizes {
+    pub size: u32,
+    pub min: u32,
+    pub max: u32,
+}
+
+impl Sizes {
+    /// always `size` x `size` (scaled to fit, keeping the aspect ratio)
+    pub fn fixed(size: u32) -> Self {
+        Self {
+            size,
+            min: size,
+            max: size,
+        }
+    }
+
+    /// `icon_size`, `min_icon_size` and `max_icon_size` of a style; the
+    /// range defaults to `icon_size` on both ends
+    pub fn of(style: &Style) -> Self {
+        let min = style.min_icon_size.unwrap_or(style.icon_size);
+        let max = style.max_icon_size.unwrap_or(style.icon_size).max(min);
+        Self {
+            size: style.icon_size.clamp(min, max),
+            min,
+            max,
+        }
+    }
+
+    /// The drawn size of a `w` x `h` image: its longer side is moved into
+    /// `min..=max`, keeping the aspect ratio.
+    fn fit(&self, w: u32, h: u32) -> (u32, u32) {
+        let long = w.max(h).max(1);
+        let scale = long.clamp(self.min.max(1), self.max.max(1)) as f32 / long as f32;
+        (
+            ((w as f32 * scale).round() as u32).max(1),
+            ((h as f32 * scale).round() as u32).max(1),
+        )
+    }
 }
 
 /// Finds the icon of a notification in the order of the spec: `image-data`,
 /// `image-path`, `app_icon`, then the icon of the `desktop-entry`. Paths may
 /// be plain, `file://` URIs or icon names from the icon theme (`theme`, or
 /// GTK's configured one).
-pub fn resolve(n: &Notification, size: u32, theme: Option<&str>) -> Option<Icon> {
+pub fn resolve(n: &Notification, sizes: Sizes, theme: Option<&str>) -> Option<Icon> {
     if let Some(img) = &n.hints.image_data {
         let rgba = RgbaImage::from_raw(img.width, img.height, img.rgba.to_vec())?;
-        return Some(Icon::Raster(scaled(rgba, size)));
+        return Some(raster(rgba, sizes));
     }
     let desktop_icon = n
         .hints
@@ -37,8 +106,8 @@ pub fn resolve(n: &Notification, size: u32, theme: Option<&str>) -> Option<Icon>
     .into_iter()
     .flatten()
     .filter(|s| !s.is_empty())
-    .find_map(|s| lookup(s, size, theme))
-    .and_then(|path| load(path, size))
+    .find_map(|s| lookup(s, sizes.size, theme))
+    .and_then(|path| load(path, sizes))
 }
 
 /// Scales an image to fit `size` x `size`, keeping its aspect ratio.
@@ -49,11 +118,23 @@ pub fn resolve(n: &Notification, size: u32, theme: Option<&str>) -> Option<Icon>
 /// lands 24px off). Scaling once here also avoids rescaling every frame.
 pub(crate) fn scaled(img: RgbaImage, size: u32) -> Handle {
     let (w, h) = img.dimensions();
-    let scale = size as f32 / w.max(h).max(1) as f32;
-    let (sw, sh) = (
-        ((w as f32 * scale).round() as u32).max(1),
-        ((h as f32 * scale).round() as u32).max(1),
-    );
+    let (sw, sh) = Sizes::fixed(size).fit(w, h);
+    resize(img, sw, sh)
+}
+
+fn raster(img: RgbaImage, sizes: Sizes) -> Icon {
+    let (w, h) = img.dimensions();
+    let (width, height) = sizes.fit(w, h);
+    Icon::Raster {
+        handle: resize(img, width, height),
+        width,
+        height,
+    }
+}
+
+fn resize(img: RgbaImage, sw: u32, sh: u32) -> Handle {
+    let (w, h) = img.dimensions();
+    let scale = sw as f32 / w.max(1) as f32;
     let img = if (sw, sh) == (w, h) {
         img
     } else {
@@ -81,19 +162,22 @@ pub(crate) fn decode(reader: ImageReader<impl BufRead + Seek>) -> ImageResult<Dy
 }
 
 /// An icon by name or path, e.g. a rule's `default_icon`.
-pub fn resolve_name(name: &str, size: u32, theme: Option<&str>) -> Option<Icon> {
-    lookup(name, size, theme).and_then(|path| load(path, size))
+pub fn resolve_name(name: &str, sizes: Sizes, theme: Option<&str>) -> Option<Icon> {
+    lookup(name, sizes.size, theme).and_then(|path| load(path, sizes))
 }
 
-fn load(path: PathBuf, size: u32) -> Option<Icon> {
+fn load(path: PathBuf, sizes: Sizes) -> Option<Icon> {
     if path.extension().is_some_and(|e| e == "svg") {
-        return Some(Icon::Svg(path));
+        return Some(Icon::Svg {
+            path,
+            size: sizes.size,
+        });
     }
     match ImageReader::open(&path)
         .map_err(Into::into)
         .and_then(decode)
     {
-        Ok(img) => Some(Icon::Raster(scaled(img.into_rgba8(), size))),
+        Ok(img) => Some(raster(img.into_rgba8(), sizes)),
         Err(e) => {
             log::warn!("cannot load icon {}: {e}", path.display());
             None
@@ -164,4 +248,45 @@ fn read_icon_key(path: &Path) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sizes_keep_images_within_the_range() {
+        let sizes = Sizes {
+            size: 48,
+            min: 32,
+            max: 64,
+        };
+        assert_eq!(sizes.fit(40, 40), (40, 40), "in range: own size");
+        assert_eq!(sizes.fit(16, 16), (32, 32), "too small: scaled up");
+        assert_eq!(sizes.fit(256, 128), (64, 32), "too big: scaled down");
+        assert_eq!(sizes.fit(8, 16), (16, 32), "longer side counts");
+        assert_eq!(Sizes::fixed(48).fit(20, 10), (48, 24));
+    }
+
+    #[test]
+    fn sizes_of_a_style() {
+        let mut style = Style {
+            icon_size: 48,
+            ..Style::default()
+        };
+        assert_eq!(Sizes::of(&style), Sizes::fixed(48));
+        style.min_icon_size = Some(16);
+        style.max_icon_size = Some(32);
+        assert_eq!(
+            Sizes::of(&style),
+            Sizes {
+                size: 32,
+                min: 16,
+                max: 32
+            },
+            "icon_size is kept in the range"
+        );
+        style.max_icon_size = Some(8);
+        assert_eq!(Sizes::of(&style).max, 16, "max below min");
+    }
 }

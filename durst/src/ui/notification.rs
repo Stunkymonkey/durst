@@ -19,6 +19,7 @@ use super::icons::Icon;
 use super::markup::Run;
 use crate::config::Style;
 use crate::core::notification::Notification;
+use crate::core::rules::IconPosition;
 
 pub(super) const SHAPING: Shaping = Shaping::Advanced;
 const WRAPPING: Wrapping = Wrapping::WordOrGlyph;
@@ -61,11 +62,21 @@ pub struct Content<'a> {
     pub count: u32,
     pub body: &'a [Run],
     pub icon: Option<&'a Icon>,
-    /// icon after the text instead of before it
-    pub icon_right: bool,
+    /// left, right or above the text (`Off` doesn't get an icon)
+    pub icon_position: IconPosition,
+}
+
+/// The width of an icon beside the text, which the text can't use.
+pub fn side_icon_width(icon: Option<&Icon>, position: IconPosition) -> Option<u32> {
+    icon.filter(|_| position != IconPosition::Top)
+        .map(Icon::width)
 }
 
 impl<'a> Content<'a> {
+    fn side_icon_width(&self) -> Option<u32> {
+        side_icon_width(self.icon, self.icon_position)
+    }
+
     /// the app name line, if the style shows it
     fn app_name(&self, style: &Style) -> Option<&'a str> {
         let notification: &'a Notification = self.notification;
@@ -97,12 +108,8 @@ pub(super) fn inset(style: &Style) -> u32 {
     style.padding + style.border.width
 }
 
-fn text_width(style: &Style, width: u32, has_icon: bool) -> f32 {
-    let icon = if has_icon {
-        style.icon_size + style.spacing
-    } else {
-        0
-    };
+fn text_width(style: &Style, width: u32, side_icon: Option<u32>) -> f32 {
+    let icon = side_icon.map_or(0, |w| w + style.spacing);
     width.saturating_sub(2 * inset(style) + icon) as f32
 }
 
@@ -164,11 +171,11 @@ fn spans_height(spans: &[Span<'_, String, Font>], style: &Style, width: f32) -> 
 /// Cuts the body to `style.max_lines` lines at the width it gets, ending it
 /// with "…". Done once when a notification is prepared, so `height` and
 /// `view` see the same cut body.
-pub fn fit_body(runs: Vec<Run>, style: &Style, width: u32, has_icon: bool) -> Vec<Run> {
+pub fn fit_body(runs: Vec<Run>, style: &Style, width: u32, side_icon: Option<u32>) -> Vec<Run> {
     if style.max_lines == 0 || runs.is_empty() {
         return runs;
     }
-    let text_w = text_width(style, width, has_icon);
+    let text_w = text_width(style, width, side_icon);
     let line = LineHeight::default().to_absolute(style.font_size.into()).0;
     let max_h = style.max_lines as f32 * line + line / 2.0;
     let fits = |runs: &[Run]| spans_height(&body_spans(runs, style), style, text_w) <= max_h;
@@ -287,7 +294,7 @@ fn action_height(c: &Content, style: &Style, text_w: f32) -> Option<f32> {
 
 /// Height in pixels of the surface `view` renders.
 pub fn height(c: &Content, style: &Style, width: u32) -> u32 {
-    let text_w = text_width(style, width, c.icon.is_some());
+    let text_w = text_width(style, width, c.side_icon_width());
     let summary = c.summary();
     let parts: Vec<f32> = [
         c.app_name(style)
@@ -305,12 +312,13 @@ pub fn height(c: &Content, style: &Style, width: u32) -> u32 {
     .collect();
     let gaps = parts.len().saturating_sub(1) as f32 * style.spacing as f32;
     let text_h = parts.iter().sum::<f32>() + gaps;
-    let icon_h = if c.icon.is_some() {
-        style.icon_size as f32
+    let icon_h = c.icon.map_or(0.0, |icon| icon.height() as f32);
+    let content_h = if c.icon_position == IconPosition::Top && c.icon.is_some() {
+        icon_h + style.spacing as f32 + text_h
     } else {
-        0.0
+        text_h.max(icon_h)
     };
-    (text_h.max(icon_h) + 2.0 * inset(style) as f32).ceil() as u32
+    (content_h + 2.0 * inset(style) as f32).ceil() as u32
 }
 
 pub fn view<'a>(c: Content<'a>, style: &'a Style, width: u32) -> Element<'a, Event> {
@@ -362,7 +370,7 @@ pub fn view<'a>(c: Content<'a>, style: &'a Style, width: u32) -> Element<'a, Eve
                 }),
         );
     }
-    let per_row = actions_per_row(&c, style, text_width(style, width, c.icon.is_some()));
+    let per_row = actions_per_row(&c, style, text_width(style, width, c.side_icon_width()));
     let mut actions: Vec<Element<'a, Event>> = c
         .actions()
         .map(|(key, label)| {
@@ -406,15 +414,16 @@ pub fn view<'a>(c: Content<'a>, style: &'a Style, width: u32) -> Element<'a, Eve
         texts = texts.push(grid);
     }
 
-    let icon = c.icon.map(|icon| icon_view(icon, style.icon_size));
-    let content = match (icon, c.icon_right) {
-        (None, _) => row![texts],
-        (Some(icon), false) => row![icon, texts],
-        (Some(icon), true) => row![texts, icon],
-    }
-    .spacing(style.spacing);
+    let content: Element<'a, Event> = match (c.icon.map(icon_view), c.icon_position) {
+        (None, _) => texts.into(),
+        (Some(icon), IconPosition::Top) => column![container(icon).center_x(Length::Fill), texts]
+            .spacing(style.spacing)
+            .into(),
+        (Some(icon), IconPosition::Right) => row![texts, icon].spacing(style.spacing).into(),
+        (Some(icon), _) => row![icon, texts].spacing(style.spacing).into(),
+    };
 
-    mouse_area(frame(content.into(), style, inset(style)))
+    mouse_area(frame(content, style, inset(style)))
         .on_press(Event::Press(mouse::Button::Left))
         .on_middle_press(Event::Press(mouse::Button::Middle))
         .on_right_press(Event::Press(mouse::Button::Right))
@@ -428,15 +437,15 @@ pub fn view<'a>(c: Content<'a>, style: &'a Style, width: u32) -> Element<'a, Eve
         .into()
 }
 
-/// An icon drawn at `size` x `size`.
-pub(super) fn icon_view<'a, E: 'a>(icon: &'a Icon, size: u32) -> Element<'a, E> {
-    let size = Length::Fixed(size as f32);
+/// An icon drawn at its size.
+pub(super) fn icon_view<'a, E: 'a>(icon: &'a Icon) -> Element<'a, E> {
+    let (w, h) = (
+        Length::Fixed(icon.width() as f32),
+        Length::Fixed(icon.height() as f32),
+    );
     match icon {
-        Icon::Svg(path) => svg(svg::Handle::from_path(path))
-            .width(size)
-            .height(size)
-            .into(),
-        Icon::Raster(handle) => image(handle.clone()).width(size).height(size).into(),
+        Icon::Svg { path, .. } => svg(svg::Handle::from_path(path)).width(w).height(h).into(),
+        Icon::Raster { handle, .. } => image(handle.clone()).width(w).height(h).into(),
     }
 }
 

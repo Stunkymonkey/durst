@@ -338,7 +338,12 @@ pub struct Style {
     pub padding: u32,
     /// space between icon and text, and between the parts of the text
     pub spacing: u32,
+    /// size of SVG icons, and the size asked for from the icon theme
     pub icon_size: u32,
+    /// raster images (and theme icons) keep their own size within
+    /// `min_icon_size..=max_icon_size`; both default to `icon_size`
+    pub min_icon_size: Option<u32>,
+    pub max_icon_size: Option<u32>,
     #[serde(deserialize_with = "color")]
     pub background: Color,
     #[serde(deserialize_with = "color")]
@@ -361,6 +366,8 @@ impl Default for Style {
             padding: 12,
             spacing: 8,
             icon_size: 48,
+            min_icon_size: None,
+            max_icon_size: None,
             background: Color::from_rgba8(0x1e, 0x1e, 0x2e, 0.9),
             foreground: Color::from_rgb8(0xcd, 0xd6, 0xf4),
             border: Border::default(),

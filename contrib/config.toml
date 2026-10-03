@@ -55,7 +55,11 @@ max_lines = 10
 show_app_name = false
 padding = 12
 spacing = 8
+# SVG icons are drawn at icon_size; raster images keep their own size within
+# min_icon_size..=max_icon_size (both default to icon_size: always icon_size)
 icon_size = 48
+# min_icon_size = 32
+# max_icon_size = 64
 background = "#1e1e2ee6"
 foreground = "#cdd6f4"
 link = "#89b4fa"
@@ -120,7 +124,7 @@ show_on_track_change = true
 # content:  set_summary set_body (templates with {app_name} {summary} {body}
 #           {category} {urgency}), hide_body, set_urgency, set_category,
 #           set_stack_tag, set_icon, set_transient
-# display:  style (like [style]), default_icon, icon_position (left|right|off),
+# display:  style (like [style]), default_icon, icon_position (left|right|top|off),
 #           timeout
 # routing:  skip_display (history only), history_ignore, defer (hold back),
 #           fullscreen = show | delay (hold back the ones arriving during

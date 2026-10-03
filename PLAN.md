@@ -165,7 +165,10 @@ scripts/visual/       visual test harness and scenarios
   dropped, text that isn't a tag stays text. Links are clickable.
 - Icons: `image-data` → `image-path` → `app_icon` → `desktop-entry` icon →
   rule `default_icon`; theme lookup with GTK's theme or `icon_theme`, hicolor
-  fallback; raster images are scaled to `icon_size` by durst (R7).
+  fallback; SVGs are drawn at `icon_size`, raster images keep their own
+  size within `min_icon_size..=max_icon_size` (both default to
+  `icon_size`), scaled once by durst (R7). `icon_position` = left, right,
+  top (centered above the text) or off.
 - Duplicates increase a counter; stack tags replace the older notification.
 - Sorting by urgency and/or arrival (`sort_by_urgency`, `newest_first`).
 
@@ -304,11 +307,11 @@ Notes on deviations, per milestone:
 
 ## 6. Testing
 
-- **Unit (59 tests):** core logic with injected time (timers, sorting,
+- **Unit (61 tests):** core logic with injected time (timers, sorting,
   duplicates, stack tags, held entries, history, rules, modes, media players,
   layout), config parsing and errors, markup, hint and metadata parsing, pod
   encoding, sound and cover helpers.
-- **Visual (41 scenarios):** `scripts/visual/run.sh` runs durst in an
+- **Visual (42 scenarios):** `scripts/visual/run.sh` runs durst in an
   isolated headless sway with a private D-Bus session, a fake logind, a
   private PipeWire with a null sink and source, and fake MPRIS players; mouse
   input via a virtual pointer. Scenarios send notifications, click, drag,
@@ -352,8 +355,6 @@ Notes on deviations, per milestone:
 
 ### Planned but not built
 
-9. **Icon size range** (min/max instead of one fixed `icon_size`) and
-   `icon_position = "top"`.
 12. **Per-rule `anchor`/`output`** (needs one stack per anchor).
 14. **Focus by activation token:** the token carries no input serial, so
     sway only marks the app's window urgent instead of focusing it (tested;
@@ -371,7 +372,7 @@ Notes on deviations, per milestone:
 
 - Merge into `master` as two PRs: `iced-layers-prototype` (the 23 commits of
   the original iced-layers prototype), then `iced-layers-rework` on top (the
-  14 commits of this rework; each milestone commit was checked with build,
+  commits of this rework; each commit was checked with build,
   clippy, unit tests and the visual scenarios).
 - Daily-driver test of M1's "done when": replace mako/dunst for a week.
 
@@ -381,5 +382,5 @@ Notes on deviations, per milestone:
    scenario).
 2. Verify items 1–2 on the real system (with explicit consent for the
    volume change).
-3. Item 9 (icon size range), then 12 (per-rule anchor/output) if wanted.
+3. Item 12 (per-rule anchor/output) if wanted.
 4. PR to `master` of durst-notification/durst (conflicts in 5 files).
