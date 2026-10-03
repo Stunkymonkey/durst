@@ -1,4 +1,4 @@
-//! The volume OSD: device name, slider, percent, mute button.
+//! The volume OSD: icon, device name, slider, percent, mute button.
 //!
 //! Like notifications it is a layer surface whose height is predicted, so
 //! `volume_height` mirrors `volume_view`.
@@ -8,8 +8,9 @@ use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{button, column, container, image, mouse_area, row, slider, text};
 use iced::{Element, Length, mouse};
 
+use super::icons::Icon;
 use super::notification::{
-    SHAPING, body_font, frame, inset, line_width, summary_font, text_height,
+    SHAPING, body_font, frame, icon_view, inset, line_width, summary_font, text_height,
 };
 use crate::config::Style;
 
@@ -34,6 +35,35 @@ pub struct VolumeContent<'a> {
     pub muted: bool,
     /// the slider's maximum in percent
     pub max: u32,
+    /// from the icon theme, see [`volume_icon_name`]
+    pub icon: Option<&'a Icon>,
+}
+
+/// The icon theme's name for a volume level (freedesktop naming spec).
+pub fn volume_icon_name(mic: bool, percent: u32, muted: bool) -> &'static str {
+    let level = match percent {
+        _ if muted => 0,
+        0 => 0,
+        1..=33 => 1,
+        34..=66 => 2,
+        _ => 3,
+    };
+    let names = if mic {
+        [
+            "microphone-sensitivity-muted",
+            "microphone-sensitivity-low",
+            "microphone-sensitivity-medium",
+            "microphone-sensitivity-high",
+        ]
+    } else {
+        [
+            "audio-volume-muted",
+            "audio-volume-low",
+            "audio-volume-medium",
+            "audio-volume-high",
+        ]
+    };
+    names[level]
 }
 
 fn percent_label(c: &VolumeContent) -> String {
@@ -67,7 +97,13 @@ pub fn volume_height(c: &VolumeContent, style: &Style) -> u32 {
     let controls = SLIDER_HEIGHT
         .max(line(&percent_label(c), body_font(style)))
         .max(button);
-    (title + style.spacing as f32 + controls + 2.0 * inset(style) as f32).ceil() as u32
+    let text = title + style.spacing as f32 + controls;
+    let icon = if c.icon.is_some() {
+        style.icon_size as f32
+    } else {
+        0.0
+    };
+    (text.max(icon) + 2.0 * inset(style) as f32).ceil() as u32
 }
 
 pub fn volume_view<'a>(c: VolumeContent<'a>, style: &'a Style) -> Element<'a, Event> {
@@ -127,13 +163,20 @@ pub fn volume_view<'a>(c: VolumeContent<'a>, style: &'a Style) -> Element<'a, Ev
     ]
     .spacing(style.spacing)
     .align_y(Vertical::Center);
-    let content = column![
+    let texts = column![
         label(c.title.to_owned(), summary_font(style)).width(Length::Fill),
         controls
     ]
     .spacing(style.spacing);
+    let content = match c.icon {
+        Some(icon) => row![icon_view(icon, style.icon_size), texts]
+            .spacing(style.spacing)
+            .align_y(Vertical::Center)
+            .into(),
+        None => Element::from(texts),
+    };
 
-    mouse_area(frame(content.into(), style, inset(style)))
+    mouse_area(frame(content, style, inset(style)))
         .on_scroll(|delta| {
             Event::Scroll(match delta {
                 mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => y,
@@ -259,4 +302,24 @@ pub fn media_view<'a>(c: MediaContent<'a>, style: &'a Style) -> Element<'a, Medi
     .on_enter(MediaEvent::Hover(true))
     .on_exit(MediaEvent::Hover(false))
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn volume_icon_levels() {
+        let speaker = |p, m| volume_icon_name(false, p, m);
+        assert_eq!(speaker(0, false), "audio-volume-muted");
+        assert_eq!(speaker(80, true), "audio-volume-muted");
+        assert_eq!(speaker(33, false), "audio-volume-low");
+        assert_eq!(speaker(34, false), "audio-volume-medium");
+        assert_eq!(speaker(67, false), "audio-volume-high");
+        assert_eq!(speaker(150, false), "audio-volume-high");
+        assert_eq!(
+            volume_icon_name(true, 50, false),
+            "microphone-sensitivity-medium"
+        );
+    }
 }

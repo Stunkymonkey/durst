@@ -296,6 +296,8 @@ pub enum MouseAction {
     DoAction,
     /// open the first link of the body
     OpenUrl,
+    /// show the last closed notification again, like `durstctl history pop`
+    HistoryPop,
 }
 
 #[derive(Deserialize, Debug, Clone)]
