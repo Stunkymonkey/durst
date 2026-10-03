@@ -6,6 +6,7 @@ members = [
     "durstctl",
     "tools/fake-logind",
     "tools/fake-player",
+    "tools/fake-window",
     "tools/vpointer",
 ]
 

@@ -1,0 +1,3 @@
+[[rule]]
+app_name = "^ruled$"
+style = { background = "#0000ff" }

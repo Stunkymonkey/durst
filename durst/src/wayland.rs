@@ -1,15 +1,17 @@
 //! durst's own Wayland connection, next to iced_layershell's: whether the
 //! user is idle (ext-idle-notify-v1), whether the focused window is
 //! fullscreen and which output it is on (wlr-foreign-toplevel-management),
-//! and the names of the outputs.
+//! the names of the outputs, and activation tokens (xdg-activation-v1).
 //!
 //! It runs on its own thread with a blocking event loop; events reach the UI
 //! loop through a subscription. Missing protocols are logged and skipped.
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use futures::channel::mpsc::{UnboundedSender, unbounded};
+use futures::channel::oneshot;
 use futures::{SinkExt, StreamExt};
 use iced::Subscription;
 use wayland_client::backend::ObjectId;
@@ -18,6 +20,10 @@ use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_chi
 use wayland_protocols::ext::idle_notify::v1::client::{
     ext_idle_notification_v1::{self, ExtIdleNotificationV1},
     ext_idle_notifier_v1::ExtIdleNotifierV1,
+};
+use wayland_protocols::xdg::activation::v1::client::{
+    xdg_activation_token_v1::{self, XdgActivationTokenV1},
+    xdg_activation_v1::XdgActivationV1,
 };
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_handle_v1::{self, ZwlrForeignToplevelHandleV1},
@@ -33,6 +39,55 @@ pub enum Event {
     /// the output of the focused window; `None` without one (e.g. an empty
     /// workspace), then the compositor decides
     FocusedOutput(Option<String>),
+    /// the compositor supports xdg-activation: tokens can be requested
+    Activation(Activator),
+}
+
+/// Requests xdg-activation tokens, to pass to an application whose action
+/// was invoked so it may focus its window.
+#[derive(Clone)]
+pub struct Activator {
+    conn: Connection,
+    activation: XdgActivationV1,
+    qh: QueueHandle<State>,
+}
+
+impl std::fmt::Debug for Activator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Activator")
+    }
+}
+
+impl PartialEq for Activator {
+    fn eq(&self, other: &Self) -> bool {
+        self.activation == other.activation
+    }
+}
+
+impl Eq for Activator {}
+
+impl Activator {
+    /// A new token, `None` if the compositor doesn't answer in time.
+    ///
+    /// It carries no input serial: the click happened on iced_layershell's
+    /// connection, whose serials are not valid on this one, and it doesn't
+    /// pass them on. What a token without one does is the compositor's
+    /// decision; sway marks the window urgent instead of focusing it.
+    pub async fn token(self, app_id: Option<String>) -> Option<String> {
+        let (tx, rx) = oneshot::channel();
+        let token = self
+            .activation
+            .get_activation_token(&self.qh, Mutex::new(Some(tx)));
+        if let Some(app_id) = app_id {
+            token.set_app_id(app_id);
+        }
+        token.commit();
+        let _ = self.conn.flush();
+        tokio::time::timeout(Duration::from_millis(500), rx)
+            .await
+            .ok()?
+            .ok()
+    }
 }
 
 /// The Wayland events; restarted when `idle_threshold` changes (`None`: no
@@ -72,8 +127,9 @@ struct Toplevel {
     outputs: Vec<ObjectId>,
 }
 
-struct State {
+pub struct State {
     tx: UnboundedSender<Event>,
+    conn: Connection,
     idle_millis: u32,
     seat: Option<wl_seat::WlSeat>,
     idle_notifier: Option<ExtIdleNotifierV1>,
@@ -149,6 +205,7 @@ fn run(idle_millis: u32, tx: UnboundedSender<Event>) -> Result<(), String> {
     conn.display().get_registry(&qh, ());
     let mut state = State {
         tx,
+        conn: conn.clone(),
         idle_millis,
         seat: None,
         idle_notifier: None,
@@ -202,6 +259,14 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                         qh,
                         (),
                     );
+                }
+                "xdg_activation_v1" => {
+                    let activation = registry.bind(name, 1, qh, ());
+                    state.send(Event::Activation(Activator {
+                        conn: state.conn.clone(),
+                        activation,
+                        qh: qh.clone(),
+                    }));
                 }
                 // version 4 announces the output's name
                 "wl_output" if version >= 4 => {
@@ -323,6 +388,24 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for State {
     }
 }
 
+impl Dispatch<XdgActivationTokenV1, Mutex<Option<oneshot::Sender<String>>>> for State {
+    fn event(
+        _: &mut Self,
+        token: &XdgActivationTokenV1,
+        event: xdg_activation_token_v1::Event,
+        reply: &Mutex<Option<oneshot::Sender<String>>>,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_activation_token_v1::Event::Done { token: value } = event {
+            if let Some(reply) = reply.lock().ok().and_then(|mut r| r.take()) {
+                let _ = reply.send(value);
+            }
+            token.destroy();
+        }
+    }
+}
+
 macro_rules! ignore_events {
     ($($t:ty),*) => {$(
         impl Dispatch<$t, ()> for State {
@@ -330,4 +413,4 @@ macro_rules! ignore_events {
         }
     )*};
 }
-ignore_events!(wl_seat::WlSeat, ExtIdleNotifierV1);
+ignore_events!(wl_seat::WlSeat, ExtIdleNotifierV1, XdgActivationV1);

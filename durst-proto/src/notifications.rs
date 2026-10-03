@@ -51,4 +51,8 @@ pub trait Notifications {
 
     #[zbus(signal)]
     fn action_invoked(&self, id: u32, action_key: &str) -> zbus::Result<()>;
+
+    /// sent right before `ActionInvoked`, if the compositor gave a token
+    #[zbus(signal)]
+    fn activation_token(&self, id: u32, activation_token: &str) -> zbus::Result<()>;
 }
