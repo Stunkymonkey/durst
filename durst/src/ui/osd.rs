@@ -98,11 +98,7 @@ pub fn volume_height(c: &VolumeContent, style: &Style) -> u32 {
         .max(line(&percent_label(c), body_font(style)))
         .max(button);
     let text = title + style.spacing as f32 + controls;
-    let icon = if c.icon.is_some() {
-        style.icon_size as f32
-    } else {
-        0.0
-    };
+    let icon = c.icon.map_or(0.0, |icon| icon.height() as f32);
     (text.max(icon) + 2.0 * inset(style) as f32).ceil() as u32
 }
 
@@ -169,7 +165,7 @@ pub fn volume_view<'a>(c: VolumeContent<'a>, style: &'a Style) -> Element<'a, Ev
     ]
     .spacing(style.spacing);
     let content = match c.icon {
-        Some(icon) => row![icon_view(icon, style.icon_size), texts]
+        Some(icon) => row![icon_view(icon), texts]
             .spacing(style.spacing)
             .align_y(Vertical::Center)
             .into(),

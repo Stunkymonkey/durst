@@ -54,6 +54,8 @@ pub enum IconPosition {
     #[default]
     Left,
     Right,
+    /// above the text, centered
+    Top,
     Off,
 }
 

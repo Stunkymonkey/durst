@@ -650,16 +650,16 @@ impl App {
         let theme = self.config.general.icon_theme.as_deref();
         let icon = match outcome.icon_position {
             IconPosition::Off => None,
-            _ => icons::resolve(n, style.icon_size, theme).or_else(|| {
+            _ => icons::resolve(n, icons::Sizes::of(&style), theme).or_else(|| {
                 let name = outcome.default_icon.as_deref()?;
-                icons::resolve_name(name, style.icon_size, theme)
+                icons::resolve_name(name, icons::Sizes::of(&style), theme)
             }),
         };
         let body = ui::fit_body(
             markup::parse(&n.body),
             &style,
             self.config.general.width,
-            icon.is_some(),
+            ui::side_icon_width(icon.as_ref(), outcome.icon_position),
         );
         Prepared {
             raw,
@@ -1400,7 +1400,7 @@ impl App {
         if !self.osd_icons.contains_key(name) {
             let size = self.config.style(Urgency::Normal).icon_size;
             let theme = self.config.general.icon_theme.as_deref();
-            let icon = icons::resolve_name(name, size, theme);
+            let icon = icons::resolve_name(name, icons::Sizes::fixed(size), theme);
             if icon.is_none() {
                 log::debug!("no icon {name} in the icon theme");
             }
@@ -1604,7 +1604,7 @@ fn content<'a>(n: &'a Notification, count: u32, p: &'a Prepared) -> Content<'a> 
         count,
         body: &p.body,
         icon: p.icon.as_ref(),
-        icon_right: p.outcome.icon_position == IconPosition::Right,
+        icon_position: p.outcome.icon_position,
     }
 }
 
