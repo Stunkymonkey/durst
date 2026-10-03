@@ -122,6 +122,44 @@ pub struct Hints {
     pub sound_file: Option<String>,
     pub sound_name: Option<String>,
     pub suppress_sound: bool,
+    /// dunst's color hints, as sent ("#rrggbb[aa]")
+    pub colors: ColorHints,
+}
+
+/// dunst's `fgcolor`, `bgcolor`, `frcolor` and `hlcolor` hints.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ColorHints {
+    pub foreground: Option<String>,
+    pub background: Option<String>,
+    pub frame: Option<String>,
+    /// the progress bar
+    pub highlight: Option<String>,
+}
+
+impl ColorHints {
+    /// As style overrides, under the rules' ones; invalid colors are skipped.
+    pub fn style(&self, valid: impl Fn(&str) -> bool) -> toml::Table {
+        let mut style = toml::Table::new();
+        let mut set = |path: &[&str], color: &Option<String>| {
+            let Some(color) = color.as_deref().filter(|c| valid(c)) else {
+                return;
+            };
+            let mut table = &mut style;
+            for key in &path[..path.len() - 1] {
+                table = table
+                    .entry(*key)
+                    .or_insert_with(|| toml::Table::new().into())
+                    .as_table_mut()
+                    .expect("only tables on the path");
+            }
+            table.insert(path[path.len() - 1].into(), color.into());
+        };
+        set(&["foreground"], &self.foreground);
+        set(&["background"], &self.background);
+        set(&["border", "color"], &self.frame);
+        set(&["progress", "color"], &self.highlight);
+        style
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -239,6 +277,21 @@ mod tests {
         assert_eq!(&img.rgba[..4], &[7, 7, 7, 255]);
         let wide = vec![0; 5000 * 3];
         assert!(ImageData::from_spec(5000, 1, 15000, false, 8, 3, &wide).is_none());
+    }
+
+    #[test]
+    fn color_hints_become_style() {
+        let colors = ColorHints {
+            foreground: Some("#ffffff".into()),
+            frame: Some("#ff0000".into()),
+            highlight: Some("bad".into()),
+            ..Default::default()
+        };
+        let style = colors.style(|c| c.starts_with('#'));
+        assert_eq!(
+            style.to_string(),
+            "foreground = \"#ffffff\"\n\n[border]\ncolor = \"#ff0000\"\n"
+        );
     }
 
     #[test]

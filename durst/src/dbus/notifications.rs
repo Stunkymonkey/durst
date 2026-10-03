@@ -4,15 +4,18 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use durst_proto::notifications::{CloseReason, INTERFACE, OBJECT_PATH, SPEC_VERSION};
-use futures::SinkExt;
-use futures::channel::mpsc::Sender;
+use futures::channel::mpsc::{Sender, UnboundedReceiver};
+use futures::future::BoxFuture;
+use futures::{SinkExt, StreamExt};
 use zbus::fdo;
 use zbus::zvariant::{OwnedValue, Value};
 use zbus::{Connection, interface};
 
 use super::Event;
 
-use crate::core::notification::{Hints, ImageData, Notification, Urgency, pair_actions};
+use crate::core::notification::{
+    ColorHints, Hints, ImageData, Notification, Urgency, pair_actions,
+};
 
 const CAPABILITIES: &[&str] = &[
     "actions",
@@ -101,34 +104,49 @@ impl Server {
     }
 }
 
-pub async fn emit_action_invoked(conn: Connection, id: u32, key: String) {
-    if let Err(e) = conn
-        .emit_signal(
-            None::<&str>,
-            OBJECT_PATH,
-            INTERFACE,
-            "ActionInvoked",
-            &(id, key),
-        )
-        .await
-    {
-        log::warn!("cannot emit ActionInvoked: {e}");
+/// A signal of `org.freedesktop.Notifications`, see [`emit_in_order`].
+pub enum Signal {
+    /// preceded by `ActivationToken` if `token` yields one
+    ActionInvoked {
+        id: u32,
+        key: String,
+        token: Option<BoxFuture<'static, Option<String>>>,
+    },
+    Closed(u32, CloseReason),
+}
+
+/// Emits the queued signals strictly in order: an `ActionInvoked` waits for
+/// its activation token, and the `NotificationClosed` queued after it must
+/// not overtake it (clients drop an action's callback once the notification
+/// is closed).
+pub async fn emit_in_order(conn: Connection, mut signals: UnboundedReceiver<Signal>) {
+    while let Some(signal) = signals.next().await {
+        match signal {
+            Signal::ActionInvoked { id, key, token } => {
+                if let Some(token) = token {
+                    match token.await {
+                        Some(token) => emit(&conn, "ActivationToken", &(id, token)).await,
+                        None => log::debug!("no activation token for {id}"),
+                    }
+                }
+                emit(&conn, "ActionInvoked", &(id, key)).await;
+            }
+            Signal::Closed(id, reason) => {
+                emit(&conn, "NotificationClosed", &(id, reason as u32)).await;
+            }
+        }
     }
 }
 
-pub async fn emit_closed(conn: Connection, id: u32, reason: CloseReason) {
-    let body = (id, reason as u32);
+async fn emit<B>(conn: &Connection, name: &str, body: &B)
+where
+    B: serde::Serialize + zbus::zvariant::DynamicType,
+{
     if let Err(e) = conn
-        .emit_signal(
-            None::<&str>,
-            OBJECT_PATH,
-            INTERFACE,
-            "NotificationClosed",
-            &body,
-        )
+        .emit_signal(None::<&str>, OBJECT_PATH, INTERFACE, name, body)
         .await
     {
-        log::warn!("cannot emit NotificationClosed: {e}");
+        log::warn!("cannot emit {name}: {e}");
     }
 }
 
@@ -171,6 +189,12 @@ fn parse_hints(hints: &HashMap<String, OwnedValue>) -> Hints {
         sound_file: string("sound-file"),
         sound_name: string("sound-name"),
         suppress_sound: boolean("suppress-sound"),
+        colors: ColorHints {
+            foreground: string("fgcolor"),
+            background: string("bgcolor"),
+            frame: string("frcolor"),
+            highlight: string("hlcolor"),
+        },
     }
 }
 

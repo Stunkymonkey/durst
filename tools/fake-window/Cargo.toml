@@ -1,0 +1,10 @@
+[package]
+name = "fake-window"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "a window for the visual test harness that activates itself with xdg-activation tokens from stdin"
+
+[dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }

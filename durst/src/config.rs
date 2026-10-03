@@ -494,7 +494,7 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
 }
 
 /// Parses "#rrggbb" or "#rrggbbaa".
-fn parse_color(s: &str) -> Result<Color, String> {
+pub fn parse_color(s: &str) -> Result<Color, String> {
     let hex = s
         .strip_prefix('#')
         .filter(|h| (h.len() == 6 || h.len() == 8) && h.chars().all(|c| c.is_ascii_hexdigit()))

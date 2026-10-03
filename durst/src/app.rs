@@ -29,7 +29,7 @@ use crate::core::notification::{Notification, Urgency};
 use crate::core::rules::{self, Context, Fullscreen, IconPosition, Outcome, ScriptOn};
 use crate::core::store::{Insert, Store};
 use crate::dbus::control::{self, Command, ModeChange, Reply, Status, emit_status_changed};
-use crate::dbus::notifications::{emit_action_invoked, emit_closed};
+use crate::dbus::notifications::{Signal, emit_in_order};
 use crate::dbus::{self, Event};
 use crate::effects;
 use crate::logind;
@@ -178,6 +178,10 @@ pub struct App {
     covers: HashMap<String, Option<iced::widget::image::Handle>>,
     covers_loading: HashSet<String>,
     conn: Option<Connection>,
+    /// Notifications signals, emitted in order by `emit_in_order`
+    signals: Option<futures::channel::mpsc::UnboundedSender<Signal>>,
+    /// requests xdg-activation tokens, if the compositor supports it
+    activator: Option<wayland::Activator>,
     /// state shared with the control interface, and the last published one
     status: Option<Arc<Mutex<Status>>>,
     published: Status,
@@ -240,6 +244,8 @@ impl App {
             covers: HashMap::new(),
             covers_loading: HashSet::new(),
             conn: None,
+            signals: None,
+            activator: None,
             status: None,
             published: Status::default(),
             prepared: HashMap::new(),
@@ -285,9 +291,11 @@ impl App {
         match message {
             Message::Dbus(Event::Connected(conn, status)) => {
                 log::info!("serving org.freedesktop.Notifications");
-                self.conn = Some(conn);
+                let (signals, queue) = futures::channel::mpsc::unbounded();
+                self.signals = Some(signals);
+                self.conn = Some(conn.clone());
                 self.status = Some(status);
-                Task::none()
+                Task::future(emit_in_order(conn, queue)).discard()
             }
             Message::Dbus(Event::Control(command, responder)) => {
                 log::debug!("control: {command:?}");
@@ -346,6 +354,10 @@ impl App {
                         .map(|key| self.remove_surface(key))
                         .collect::<Vec<_>>(),
                 )
+            }
+            Message::Wayland(wayland::Event::Activation(activator)) => {
+                self.activator = Some(activator);
+                Task::none()
             }
             Message::Wayland(wayland::Event::FocusedOutput(output)) => {
                 log::debug!("focused output: {output:?}");
@@ -621,9 +633,12 @@ impl App {
         delayed: bool,
     ) -> Prepared {
         let urgency = n.hints.urgency;
+        // the sender's color hints, then the rules' style over them
+        let mut overrides = n.hints.colors.style(|c| config::parse_color(c).is_ok());
+        config::merge(&mut overrides, &outcome.style);
         let style = self
             .config
-            .style_with(urgency, &outcome.style)
+            .style_with(urgency, &overrides)
             .unwrap_or_else(|e| {
                 log::warn!("rule style: {e}");
                 self.config.style(urgency).clone()
@@ -809,10 +824,28 @@ impl App {
         if let (Some(p), Some(e)) = (self.prepared.get(&id), self.store.get(id)) {
             run_scripts(&p.outcome, &e.notification, ScriptOn::Action, Some(key));
         }
-        match self.conn.clone() {
-            Some(conn) => Task::future(emit_action_invoked(conn, id, key.to_owned())).discard(),
-            None => Task::none(),
+        // the app may focus its window with the token; the desktop entry is
+        // what Wayland calls the app id
+        let app_id = self
+            .store
+            .get(id)
+            .and_then(|e| e.notification.hints.desktop_entry.clone());
+        let token = self
+            .activator
+            .clone()
+            .map(|a| Box::pin(a.token(app_id)) as futures::future::BoxFuture<_>);
+        self.signal(Signal::ActionInvoked {
+            id,
+            key: key.to_owned(),
+            token,
+        })
+    }
+
+    fn signal(&self, signal: Signal) -> Task<Message> {
+        if let Some(signals) = &self.signals {
+            let _ = signals.unbounded_send(signal);
         }
+        Task::none()
     }
 
     /// After an action the notification closes, unless it asked to stay.
@@ -846,10 +879,7 @@ impl App {
     }
 
     fn emit_closed(&self, id: u32, reason: CloseReason) -> Task<Message> {
-        match self.conn.clone() {
-            Some(conn) => Task::future(emit_closed(conn, id, reason)).discard(),
-            None => Task::none(),
-        }
+        self.signal(Signal::Closed(id, reason))
     }
 
     /// Opens, moves, resizes and closes surfaces to match the store.

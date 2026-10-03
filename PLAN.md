@@ -89,7 +89,7 @@ durst/                daemon
       cover.rs        cover art loading (file / http)
 durstctl/             CLI (clap), thin client over Durst1
 durst-proto/          shared: proxies and serializable types
-tools/                test helpers: vpointer, fake-logind, fake-player
+tools/                test helpers: vpointer, fake-logind, fake-player, fake-window
 contrib/              example config, systemd unit, D-Bus service files
 scripts/visual/       visual test harness and scenarios
 ```
@@ -141,8 +141,13 @@ scripts/visual/       visual test harness and scenarios
 
 - Methods `Notify`, `CloseNotification`, `GetCapabilities`,
   `GetServerInformation`; signals `NotificationClosed` (1 expired,
-  2 dismissed, 3 closed by the sender, 4 undefined: replaced or skipped) and
-  `ActionInvoked`.
+  2 dismissed, 3 closed by the sender, 4 undefined: replaced or skipped),
+  `ActionInvoked`, and before it `ActivationToken` with an xdg-activation
+  token for the app's window (`desktop-entry` as app id). Signals go
+  through one queue, so waiting for the token never lets
+  `NotificationClosed` overtake `ActionInvoked`.
+- dunst's color hints `fgcolor`, `bgcolor`, `frcolor`, `hlcolor` (progress
+  bar) restyle a notification; rules' styles apply over them.
 - `replaces_id` updates in place; `expire_timeout` -1 / 0 / ms, overridable
   with `ignore_dbus_timeout`.
 - Capabilities: `actions`, `body`, `body-hyperlinks`, `body-markup`,
@@ -299,11 +304,11 @@ Notes on deviations, per milestone:
 
 ## 6. Testing
 
-- **Unit (57 tests):** core logic with injected time (timers, sorting,
+- **Unit (58 tests):** core logic with injected time (timers, sorting,
   duplicates, stack tags, held entries, history, rules, modes, media players,
   layout), config parsing and errors, markup, hint and metadata parsing, pod
   encoding, sound and cover helpers.
-- **Visual (37 scenarios):** `scripts/visual/run.sh` runs durst in an
+- **Visual (39 scenarios):** `scripts/visual/run.sh` runs durst in an
   isolated headless sway with a private D-Bus session, a fake logind, a
   private PipeWire with a null sink and source, and fake MPRIS players; mouse
   input via a virtual pointer. Scenarios send notifications, click, drag,
@@ -352,8 +357,10 @@ Notes on deviations, per milestone:
 11. **Volume OSD icon** reflecting level and mute.
 12. **Per-rule `anchor`/`output`** (needs one stack per anchor).
 13. **`history_pop` mouse action.**
-14. **`ActivationToken` signal** (xdg-activation, so actions can focus the
-    app) and the `hlcolor` hint.
+14. **Focus by activation token:** the token carries no input serial, so
+    sway only marks the app's window urgent instead of focusing it (tested;
+    other compositors not). A serial needs iced_layershell to pass on the
+    click's serial (layershellev has it internally).
 17. **Markup fuzzing** (`cargo fuzz` target).
 
 ### Decided against in the planning (could be revisited)

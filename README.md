@@ -172,8 +172,8 @@ signals, `snap`/`geom`/`pixel` inspect the screen mid-scenario, and a
 several outputs (`# outputs: 2`) or D-Bus activation (`# activation`). Mouse
 input goes through `tools/vpointer`, a virtual pointer inside the sandbox;
 `tools/fake-logind` and `tools/fake-player` stand in for logind and media
-players, and a private PipeWire (`scripts/visual/pipewire.conf`) for the
-audio system.
+players, `tools/fake-window` for an app that activates its window, and a
+private PipeWire (`scripts/visual/pipewire.conf`) for the audio system.
 The running session, its notification daemon and the screen are not affected.
 
 ```sh
