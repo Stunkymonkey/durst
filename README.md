@@ -188,6 +188,20 @@ software renderer (`ICED_BACKEND=tiny-skia`), so pixels are deterministic.
 `REPEAT=N scripts/visual/run-all.sh` runs every scenario N times, to catch
 races.
 
+### fuzzing
+
+Notification bodies come from any app, so the markup parser is fuzzed
+(`fuzz/`, not part of the workspace). The flake's toolchain is stable, which
+cargo-fuzz accepts with `RUSTC_BOOTSTRAP=1`; safe Rust needs no sanitizer:
+
+```sh
+cd fuzz
+RUSTC_BOOTSTRAP=1 cargo fuzz run -s none markup -- -max_total_time=300 -timeout=1
+```
+
+Besides panics and slow inputs it checks that runs are merged and that
+escaped text comes back unchanged.
+
 ## ToDo
 
 The detailed milestones are in [PLAN.md](PLAN.md#5-milestones).

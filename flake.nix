@@ -96,6 +96,7 @@
             rustfmt
             clippy
             cargo-outdated
+            cargo-fuzz
             rustPlatform.bindgenHook
 
             # scripts/visual (pipewire: a private instance for the volume tests)

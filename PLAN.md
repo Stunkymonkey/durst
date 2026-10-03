@@ -315,7 +315,7 @@ Notes on deviations, per milestone:
 
 ## 6. Testing
 
-- **Unit (62 tests):** core logic with injected time (timers, sorting,
+- **Unit (64 tests):** core logic with injected time (timers, sorting,
   duplicates, stack tags, held entries, history, rules, modes, media players,
   layout), config parsing and errors, markup, hint and metadata parsing, pod
   encoding, sound and cover helpers.
@@ -327,6 +327,10 @@ Notes on deviations, per milestone:
   screenshot measurements (box geometry, padding, pixel colors), D-Bus
   signals, `durstctl`, `pw-dump` and the players' call logs.
   `scripts/visual/run-all.sh` runs all; `REPEAT=N` catches races.
+- **Fuzzing:** `fuzz/` runs the markup parser under cargo-fuzz (see
+  README); found a panic (entity lookahead cut a multi-byte character) and
+  a quadratic case (many `<` without `>`), both fixed with unit tests;
+  4.1 M inputs in 5 min clean afterwards (2026-10-04).
 - **CI:** `.github/workflows/rust.yml` runs fmt, clippy, tests, all visual
   scenarios and the package build via nix; passes on GitHub (PR #1 in the
   fork).
@@ -366,7 +370,6 @@ Notes on deviations, per milestone:
     sway only marks the app's window urgent instead of focusing it (tested;
     other compositors not). A serial needs iced_layershell to pass on the
     click's serial (layershellev has it internally).
-17. **Markup fuzzing** (`cargo fuzz` target).
 
 ### Decided against in the planning (could be revisited)
 
