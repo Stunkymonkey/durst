@@ -33,12 +33,22 @@ pub fn subscription() -> Subscription<bool> {
     Subscription::run(stream)
 }
 
+/// Watches the lock state, and again whenever the connection or logind goes
+/// away; meanwhile the last known state stays.
 fn stream() -> impl Stream<Item = bool> {
     iced::stream::channel(4, async |mut output| {
-        if let Err(e) = watch(&mut output).await {
-            log::warn!("lock detection unavailable: {e}");
+        let mut backoff = crate::retry::Backoff::new("lock detection");
+        loop {
+            backoff.attempt();
+            let reason = match watch(&mut output).await {
+                Ok(()) => "disconnected".to_string(),
+                Err(e) => e.to_string(),
+            };
+            if output.is_closed() {
+                return;
+            }
+            backoff.failed(reason).await;
         }
-        std::future::pending::<()>().await;
     })
 }
 

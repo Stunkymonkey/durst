@@ -26,6 +26,7 @@
 #   durstctl ...        the CLI built next to durst
 #   state KEY           a field of `durstctl info --json` (idle, locked, ...)
 #   lock / unlock       lock state of the fake logind durst watches
+#   logind_stop / logind_start, pipewire_stop / pipewire_start: restart them
 #   pw_volume NODE      "PERCENT MUTED" of test-sink / test-source, read
 #                       from the private PipeWire itself
 #   pw_set NODE PERCENT change a volume like another program would
@@ -138,20 +139,38 @@ wait_for sh -c "swaymsg -t get_seats -r | grep -q '\"capabilities\": [1-9]'" \
     || { echo "virtual pointer missing, see $log/vpointer.log" >&2; KEEP_LOGS=1; exit 1; }
 
 # a fake logind on the private bus: durst never sees the real lock state
-mkfifo "$work/logind"
-LD_LIBRARY_PATH="$durst_ld" "$root/target/debug/fake-logind" <"$work/logind" >"$log/logind.log" 2>&1 &
-exec 4>"$work/logind"
-wait_for busctl --user status org.freedesktop.login1 \
-    || { echo "fake logind missing, see $log/logind.log" >&2; KEEP_LOGS=1; exit 1; }
+logind_start() {
+    rm -f "$work/logind"
+    mkfifo "$work/logind"
+    LD_LIBRARY_PATH="$durst_ld" "$root/target/debug/fake-logind" <"$work/logind" >>"$log/logind.log" 2>&1 &
+    logind_pid=$!
+    exec 4>"$work/logind"
+    wait_for busctl --user status org.freedesktop.login1 \
+        || { echo "fake logind missing, see $log/logind.log" >&2; KEEP_LOGS=1; exit 1; }
+}
+logind_stop() {
+    exec 4>&-
+    kill "$logind_pid"
+    wait_for sh -c '! busctl --user status org.freedesktop.login1'
+}
+logind_start
 export DURST_LOGIND_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"
 
 # a private PipeWire with a null sink and source (scripts/visual/pipewire.conf);
 # its socket is in the sandbox's XDG_RUNTIME_DIR, the real audio is untouched
-pipewire -c "$here/pipewire.conf" >"$log/pipewire.log" 2>&1 &
-wait_for test -S "$XDG_RUNTIME_DIR/pipewire-0" \
-    || { echo "pipewire missing, see $log/pipewire.log" >&2; KEEP_LOGS=1; exit 1; }
-wait_for pw-metadata -n default 0 default.audio.sink '{ "name": "test-sink" }'
-pw-metadata -n default 0 default.audio.source '{ "name": "test-source" }' >/dev/null
+pipewire_start() {
+    pipewire -c "$here/pipewire.conf" >>"$log/pipewire.log" 2>&1 &
+    pipewire_pid=$!
+    wait_for test -S "$XDG_RUNTIME_DIR/pipewire-0" \
+        || { echo "pipewire missing, see $log/pipewire.log" >&2; KEEP_LOGS=1; exit 1; }
+    wait_for pw-metadata -n default 0 default.audio.sink '{ "name": "test-sink" }'
+    pw-metadata -n default 0 default.audio.source '{ "name": "test-source" }' >/dev/null
+}
+pipewire_stop() {
+    kill "$pipewire_pid"
+    wait_for sh -c "! test -S '$XDG_RUNTIME_DIR/pipewire-0'"
+}
+pipewire_start
 
 dbus-monitor --session "type='signal',interface='org.freedesktop.Notifications'" \
     "type='signal',path='/org/durst_notification/Durst'" \

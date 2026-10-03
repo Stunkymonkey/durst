@@ -367,6 +367,12 @@ impl App {
                 self.audio = Some(handle);
                 Task::none()
             }
+            Message::Audio(audio::Event::Disconnected) => {
+                self.audio = None;
+                self.volumes.clear();
+                self.osd = None;
+                Task::none()
+            }
             Message::Audio(audio::Event::Changed(target, volume)) => {
                 log::debug!("volume {target:?}: {volume:?}");
                 let previous = self.volumes.insert(target, volume.clone());
@@ -404,6 +410,12 @@ impl App {
                 if changed && !initial && self.config.osd.media.show_on_track_change {
                     self.show_media_osd();
                 }
+                self.load_cover()
+            }
+            Message::Mpris(mpris::Event::Disconnected) => {
+                self.mpris = None;
+                self.players = Default::default();
+                self.media_osd = None;
                 self.load_cover()
             }
             Message::Mpris(mpris::Event::Gone(name)) => {

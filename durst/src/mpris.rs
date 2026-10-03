@@ -63,6 +63,8 @@ pub enum Event {
         initial: bool,
     },
     Gone(String),
+    /// the session bus connection is gone; all players with it
+    Disconnected,
 }
 
 /// Sends actions to a player (by bus name).
@@ -87,10 +89,18 @@ pub fn subscription() -> Subscription<Event> {
 
 fn stream() -> impl Stream<Item = Event> {
     iced::stream::channel(32, async |mut output| {
-        if let Err(e) = watch(&mut output).await {
-            log::warn!("media players unavailable: {e}");
+        let mut backoff = crate::retry::Backoff::new("media players");
+        loop {
+            backoff.attempt();
+            let reason = match watch(&mut output).await {
+                Ok(()) => "disconnected".to_string(),
+                Err(e) => e.to_string(),
+            };
+            if output.send(Event::Disconnected).await.is_err() {
+                return;
+            }
+            backoff.failed(reason).await;
         }
-        std::future::pending::<()>().await;
     })
 }
 
@@ -180,8 +190,14 @@ async fn watch(output: &mut futures::channel::mpsc::Sender<Event>) -> zbus::Resu
                     log::warn!("{action:?} on {name}: {e}");
                 }
             }
+            // the bus connection ended
+            else => break,
         }
     }
+    for handle in streams.into_values() {
+        handle.abort();
+    }
+    Ok(())
 }
 
 async fn add_player(
