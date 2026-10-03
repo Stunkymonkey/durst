@@ -372,7 +372,8 @@ Notes on deviations, per milestone:
 
 ### Housekeeping
 
-- Merge `iced-layers` into `master` (13 commits, PR not created yet).
+- Merge `iced-layers` into `master`: 36 commits ahead (23 from the earlier
+  iced-layers work, 13 from this rework); no PR yet.
 - Daily-driver test of M1's "done when": replace mako/dunst for a week.
 
 ## 9. Next steps (suggested order)
