@@ -29,6 +29,12 @@ impl Urgency {
     }
 }
 
+/// `image-data` hints larger than this per side are ignored.
+pub const MAX_IMAGE_SIDE: u32 = 4096;
+/// Kept at most this large per side: drawn at icon size anyway, and kept
+/// with the notification and in the history.
+pub const KEPT_IMAGE_SIDE: u32 = 256;
+
 /// Raw pixels from the `image-data` hint, converted to RGBA8.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImageData {
@@ -58,6 +64,10 @@ impl ImageData {
         if bits_per_sample != 8 || channels != if has_alpha { 4 } else { 3 } || w == 0 || h == 0 {
             return None;
         }
+        if w.max(h) > MAX_IMAGE_SIDE as usize {
+            log::warn!("ignoring image-data hint of {w}x{h}, larger than {MAX_IMAGE_SIDE}");
+            return None;
+        }
         // the last row may be shorter than rowstride
         if stride < w * channels || data.len() < stride * (h - 1) + w * channels {
             return None;
@@ -69,11 +79,29 @@ impl ImageData {
                 rgba.push(if has_alpha { px[3] } else { 255 });
             }
         }
-        Some(Self {
-            width: w as u32,
-            height: h as u32,
-            rgba: rgba.into(),
-        })
+        Some(Self::shrunk(w as u32, h as u32, rgba))
+    }
+
+    /// Scales images larger than [`KEPT_IMAGE_SIDE`] down to it.
+    fn shrunk(width: u32, height: u32, rgba: Vec<u8>) -> Self {
+        let largest = width.max(height);
+        if largest <= KEPT_IMAGE_SIDE {
+            return Self {
+                width,
+                height,
+                rgba: rgba.into(),
+            };
+        }
+        let scale = |n: u32| ((n as u64 * KEPT_IMAGE_SIDE as u64 / largest as u64) as u32).max(1);
+        let (w, h) = (scale(width), scale(height));
+        let img =
+            image::RgbaImage::from_raw(width, height, rgba).expect("width * height * 4 bytes");
+        let img = image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle);
+        Self {
+            width: w,
+            height: h,
+            rgba: img.into_raw().into(),
+        }
     }
 }
 
@@ -200,6 +228,17 @@ mod tests {
         assert!(ImageData::from_spec(2, 2, 8, true, 8, 4, &rgba).is_some());
         assert!(ImageData::from_spec(2, 2, 8, true, 8, 3, &rgba).is_none());
         assert!(ImageData::from_spec(2, 3, 8, true, 8, 4, &rgba).is_none());
+    }
+
+    #[test]
+    fn large_image_data_is_shrunk_or_ignored() {
+        let data = vec![7; 600 * 300 * 3];
+        let img = ImageData::from_spec(600, 300, 1800, false, 8, 3, &data).unwrap();
+        assert_eq!((img.width, img.height), (256, 128));
+        assert_eq!(img.rgba.len(), 256 * 128 * 4);
+        assert_eq!(&img.rgba[..4], &[7, 7, 7, 255]);
+        let wide = vec![0; 5000 * 3];
+        assert!(ImageData::from_spec(5000, 1, 15000, false, 8, 3, &wide).is_none());
     }
 
     #[test]

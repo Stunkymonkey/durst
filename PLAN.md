@@ -299,7 +299,7 @@ Notes on deviations, per milestone:
 
 ## 6. Testing
 
-- **Unit (56 tests):** core logic with injected time (timers, sorting,
+- **Unit (57 tests):** core logic with injected time (timers, sorting,
   duplicates, stack tags, held entries, history, rules, modes, media players,
   layout), config parsing and errors, markup, hint and metadata parsing, pod
   encoding, sound and cover helpers.
@@ -356,8 +356,6 @@ Notes on deviations, per milestone:
 13. **`history_pop` mouse action.**
 14. **`ActivationToken` signal** (xdg-activation, so actions can focus the
     app) and the `hlcolor` hint.
-16. **Size limit for `image-data`** hints (covers have 10 MB, image hints
-    none).
 17. **Markup fuzzing** (`cargo fuzz` target).
 
 ### Decided against in the planning (could be revisited)
@@ -380,5 +378,5 @@ Notes on deviations, per milestone:
    scenario).
 2. Verify items 1–2 on the real system (with explicit consent for the
    volume change).
-3. Item 16 (robustness), then 8, 11 (looks).
+3. Item 8, then 11 (looks).
 4. PR to `master` of durst-notification/durst (conflicts in 5 files).

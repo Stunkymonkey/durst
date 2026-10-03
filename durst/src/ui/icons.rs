@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use ::image::RgbaImage;
+use std::io::{BufRead, Seek};
+
 use ::image::imageops::{self, FilterType};
+use ::image::{DynamicImage, ImageReader, ImageResult, Limits, RgbaImage};
 use iced::widget::image::Handle;
 
 use crate::core::notification::Notification;
@@ -66,6 +68,18 @@ pub(crate) fn scaled(img: RgbaImage, size: u32) -> Handle {
     Handle::from_rgba(sw, sh, img.into_raw())
 }
 
+/// Decodes an icon or cover with limits: a small file can describe a huge
+/// image, and all are drawn at icon or cover size.
+pub(crate) fn decode(reader: ImageReader<impl BufRead + Seek>) -> ImageResult<DynamicImage> {
+    let mut reader = reader.with_guessed_format()?;
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    reader.limits(limits);
+    reader.decode()
+}
+
 /// An icon by name or path, e.g. a rule's `default_icon`.
 pub fn resolve_name(name: &str, size: u32, theme: Option<&str>) -> Option<Icon> {
     lookup(name, size, theme).and_then(|path| load(path, size))
@@ -75,7 +89,10 @@ fn load(path: PathBuf, size: u32) -> Option<Icon> {
     if path.extension().is_some_and(|e| e == "svg") {
         return Some(Icon::Svg(path));
     }
-    match ::image::open(&path) {
+    match ImageReader::open(&path)
+        .map_err(Into::into)
+        .and_then(decode)
+    {
         Ok(img) => Some(Icon::Raster(scaled(img.into_rgba8(), size))),
         Err(e) => {
             log::warn!("cannot load icon {}: {e}", path.display());
