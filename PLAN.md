@@ -303,7 +303,7 @@ Notes on deviations, per milestone:
   duplicates, stack tags, held entries, history, rules, modes, media players,
   layout), config parsing and errors, markup, hint and metadata parsing, pod
   encoding, sound and cover helpers.
-- **Visual (36 scenarios):** `scripts/visual/run.sh` runs durst in an
+- **Visual (37 scenarios):** `scripts/visual/run.sh` runs durst in an
   isolated headless sway with a private D-Bus session, a fake logind, a
   private PipeWire with a null sink and source, and fake MPRIS players; mouse
   input via a virtual pointer. Scenarios send notifications, click, drag,
@@ -347,8 +347,6 @@ Notes on deviations, per milestone:
 
 ### Planned but not built
 
-8. **Many actions:** all buttons share one row and get narrower; labels are
-   clipped.
 9. **Icon size range** (min/max instead of one fixed `icon_size`) and
    `icon_position = "top"`.
 11. **Volume OSD icon** reflecting level and mute.
@@ -378,5 +376,5 @@ Notes on deviations, per milestone:
    scenario).
 2. Verify items 1–2 on the real system (with explicit consent for the
    volume change).
-3. Item 8, then 11 (looks).
+3. Item 11 (looks), 13 (`history_pop` on a mouse button).
 4. PR to `master` of durst-notification/durst (conflicts in 5 files).

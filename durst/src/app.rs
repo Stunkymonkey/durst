@@ -486,6 +486,7 @@ impl App {
                 ui::view(
                     content(&entry.notification, entry.count, prepared),
                     &prepared.style,
+                    self.config.general.width,
                 )
             }
             Some(Key::More) => ui::more_view(

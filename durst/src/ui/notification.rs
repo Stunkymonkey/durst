@@ -11,7 +11,7 @@ use iced::advanced::text::{
 };
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
-    button, column, container, image, mouse_area, progress_bar, rich_text, row, svg, text,
+    button, column, container, image, mouse_area, progress_bar, rich_text, row, space, svg, text,
 };
 use iced::{Element, Font, Length, Size, font, mouse};
 
@@ -255,12 +255,34 @@ fn body_spans<'a>(runs: &'a [Run], style: &Style) -> Vec<Span<'a, String, Font>>
         .collect()
 }
 
-fn action_height(c: &Content, style: &Style) -> Option<f32> {
+/// How many action buttons share a row: all buttons are equally wide, and
+/// as many as fit with their labels uncut; at least one (a label wider than
+/// the whole row is cut).
+fn actions_per_row(c: &Content, style: &Style, text_w: f32) -> usize {
+    let widest = c
+        .actions()
+        .map(|(_, label)| line_width(label, body_font(style), style).ceil())
+        .fold(0.0, f32::max)
+        + 2.0 * style.action.padding as f32;
+    let spacing = style.spacing as f32;
+    let n = c.actions().count();
+    (1..=n)
+        .rev()
+        .find(|&k| (text_w - (k - 1) as f32 * spacing) / k as f32 >= widest)
+        .unwrap_or(1)
+}
+
+fn action_height(c: &Content, style: &Style, text_w: f32) -> Option<f32> {
     let line = c
         .actions()
         .map(|(_, label)| text_height(label, body_font(style), style, f32::INFINITY))
         .reduce(f32::max)?;
-    Some(line + 2.0 * style.action.padding as f32)
+    let rows = c
+        .actions()
+        .count()
+        .div_ceil(actions_per_row(c, style, text_w));
+    let button = line + 2.0 * style.action.padding as f32;
+    Some(rows as f32 * button + (rows - 1) as f32 * style.spacing as f32)
 }
 
 /// Height in pixels of the surface `view` renders.
@@ -276,7 +298,7 @@ pub fn height(c: &Content, style: &Style, width: u32) -> u32 {
             .hints
             .value
             .map(|_| style.progress.height as f32),
-        action_height(c, style),
+        action_height(c, style, text_w),
     ]
     .into_iter()
     .flatten()
@@ -291,7 +313,7 @@ pub fn height(c: &Content, style: &Style, width: u32) -> u32 {
     (text_h.max(icon_h) + 2.0 * inset(style) as f32).ceil() as u32
 }
 
-pub fn view<'a>(c: Content<'a>, style: &'a Style) -> Element<'a, Event> {
+pub fn view<'a>(c: Content<'a>, style: &'a Style, width: u32) -> Element<'a, Event> {
     let mut texts = column![].spacing(style.spacing);
     if let Some(name) = c.app_name(style) {
         texts = texts.push(
@@ -340,7 +362,8 @@ pub fn view<'a>(c: Content<'a>, style: &'a Style) -> Element<'a, Event> {
                 }),
         );
     }
-    let actions: Vec<Element<'a, Event>> = c
+    let per_row = actions_per_row(&c, style, text_width(style, width, c.icon.is_some()));
+    let mut actions: Vec<Element<'a, Event>> = c
         .actions()
         .map(|(key, label)| {
             let action = style.action.clone();
@@ -372,7 +395,15 @@ pub fn view<'a>(c: Content<'a>, style: &'a Style) -> Element<'a, Event> {
         })
         .collect();
     if !actions.is_empty() {
-        texts = texts.push(row(actions).spacing(style.spacing));
+        // fill the last row up, so the buttons stay in a grid
+        let missing = actions.len().next_multiple_of(per_row) - actions.len();
+        actions.extend((0..missing).map(|_| space().width(Length::Fill).into()));
+        let mut grid = column![].spacing(style.spacing);
+        let mut actions = actions.into_iter().peekable();
+        while actions.peek().is_some() {
+            grid = grid.push(row(actions.by_ref().take(per_row)).spacing(style.spacing));
+        }
+        texts = texts.push(grid);
     }
 
     let icon = c.icon.map(|icon| {
