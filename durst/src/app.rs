@@ -635,11 +635,17 @@ impl App {
                 icons::resolve_name(name, style.icon_size, theme)
             }),
         };
+        let body = ui::fit_body(
+            markup::parse(&n.body),
+            &style,
+            self.config.general.width,
+            icon.is_some(),
+        );
         Prepared {
             raw,
             rules,
             delayed,
-            body: markup::parse(&n.body),
+            body,
             icon,
             style,
             outcome,

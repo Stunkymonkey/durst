@@ -42,7 +42,7 @@ in [section 8](#8-missing-parts) everything that is still missing.
 | Mouse | dunst defaults, every button configurable |
 | Keyboard | Never focused; CLI only |
 | Config | TOML at `$XDG_CONFIG_HOME/durst/config.toml`, watched and reloaded; errors are shown as a notification |
-| Theming | Structured style keys, per urgency and per rule (tables merged over the base style) |
+| Theming | Structured style keys, per urgency and per rule (tables merged over the base style); font family, body cut to `max_lines` with "…", optional app name line |
 | D-Bus | `zbus` 5 (async, pure Rust) |
 | IPC | Own D-Bus interface `org.durst_notification.Durst1` on the session bus |
 | CLI | Own noun–verb design (not dunstctl-compatible); no bar subscribe stream |
@@ -299,11 +299,11 @@ Notes on deviations, per milestone:
 
 ## 6. Testing
 
-- **Unit (55 tests):** core logic with injected time (timers, sorting,
+- **Unit (56 tests):** core logic with injected time (timers, sorting,
   duplicates, stack tags, held entries, history, rules, modes, media players,
   layout), config parsing and errors, markup, hint and metadata parsing, pod
   encoding, sound and cover helpers.
-- **Visual (35 scenarios):** `scripts/visual/run.sh` runs durst in an
+- **Visual (36 scenarios):** `scripts/visual/run.sh` runs durst in an
   isolated headless sway with a private D-Bus session, a fake logind, a
   private PipeWire with a null sink and source, and fake MPRIS players; mouse
   input via a virtual pointer. Scenarios send notifications, click, drag,
@@ -347,15 +347,10 @@ Notes on deviations, per milestone:
 
 ### Planned but not built
 
-6. **`font` option:** the style has `font_size` only; the font family is
-   the system's sans-serif.
-7. **Long bodies:** no `max_lines`/ellipsis; a very long body makes a
-   notification taller than the screen.
 8. **Many actions:** all buttons share one row and get narrower; labels are
    clipped.
 9. **Icon size range** (min/max instead of one fixed `icon_size`) and
    `icon_position = "top"`.
-10. **App name** is not shown in notifications (only used by rules).
 11. **Volume OSD icon** reflecting level and mute.
 12. **Per-rule `anchor`/`output`** (needs one stack per anchor).
 13. **`history_pop` mouse action.**
@@ -385,5 +380,5 @@ Notes on deviations, per milestone:
    scenario).
 2. Verify items 1–2 on the real system (with explicit consent for the
    volume change).
-3. Item 7 (robustness), then 6, 10, 11 (looks).
+3. Item 16 (robustness), then 8, 11 (looks).
 4. PR to `master` of durst-notification/durst (conflicts in 5 files).

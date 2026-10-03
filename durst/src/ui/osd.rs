@@ -9,7 +9,7 @@ use iced::widget::{button, column, container, image, mouse_area, row, slider, te
 use iced::{Element, Length, mouse};
 
 use super::notification::{
-    BODY_FONT, SHAPING, SUMMARY_FONT, frame, inset, line_width, text_height,
+    SHAPING, body_font, frame, inset, line_width, summary_font, text_height,
 };
 use crate::config::Style;
 
@@ -53,7 +53,7 @@ fn mute_label(c: &VolumeContent) -> &'static str {
 /// Wide enough for both labels, so the slider doesn't jump when muting.
 fn mute_width(style: &Style) -> f32 {
     let widest = ["Mute", "Unmute"]
-        .map(|l| line_width(l, BODY_FONT, style))
+        .map(|l| line_width(l, body_font(style), style))
         .into_iter()
         .fold(0.0, f32::max);
     (widest + 2.0 * style.action.padding as f32).ceil()
@@ -62,10 +62,10 @@ fn mute_width(style: &Style) -> f32 {
 /// Height in pixels of the surface `volume_view` renders.
 pub fn volume_height(c: &VolumeContent, style: &Style) -> u32 {
     let line = |s: &str, font| text_height(s, font, style, f32::INFINITY);
-    let title = line(c.title, SUMMARY_FONT);
-    let button = line(mute_label(c), BODY_FONT) + 2.0 * style.action.padding as f32;
+    let title = line(c.title, summary_font(style));
+    let button = line(mute_label(c), body_font(style)) + 2.0 * style.action.padding as f32;
     let controls = SLIDER_HEIGHT
-        .max(line(&percent_label(c), BODY_FONT))
+        .max(line(&percent_label(c), body_font(style)))
         .max(button);
     (title + style.spacing as f32 + controls + 2.0 * inset(style) as f32).ceil() as u32
 }
@@ -100,7 +100,7 @@ pub fn volume_view<'a>(c: VolumeContent<'a>, style: &'a Style) -> Element<'a, Ev
         });
     let action = style.action.clone();
     let mute = button(
-        label(mute_label(&c).into(), BODY_FONT)
+        label(mute_label(&c).into(), body_font(style))
             .align_x(Horizontal::Center)
             .width(Length::Fill),
     )
@@ -120,7 +120,7 @@ pub fn volume_view<'a>(c: VolumeContent<'a>, style: &'a Style) -> Element<'a, Ev
     });
     let controls = row![
         volume_slider,
-        label(percent_label(&c), BODY_FONT)
+        label(percent_label(&c), body_font(style))
             .width(PERCENT_WIDTH)
             .align_x(Horizontal::Right),
         mute,
@@ -128,7 +128,7 @@ pub fn volume_view<'a>(c: VolumeContent<'a>, style: &'a Style) -> Element<'a, Ev
     .spacing(style.spacing)
     .align_y(Vertical::Center);
     let content = column![
-        label(c.title.to_owned(), SUMMARY_FONT).width(Length::Fill),
+        label(c.title.to_owned(), summary_font(style)).width(Length::Fill),
         controls
     ]
     .spacing(style.spacing);
@@ -166,7 +166,7 @@ const MEDIA_LABELS: [&str; 4] = ["Previous", "Play", "Pause", "Next"];
 /// One width for all buttons, so Play/Pause doesn't move anything.
 fn media_button_width(style: &Style) -> f32 {
     let widest = MEDIA_LABELS
-        .map(|l| line_width(l, BODY_FONT, style))
+        .map(|l| line_width(l, body_font(style), style))
         .into_iter()
         .fold(0.0, f32::max);
     (widest + 2.0 * style.action.padding as f32).ceil()
@@ -176,11 +176,11 @@ fn media_button_width(style: &Style) -> f32 {
 pub fn media_height(c: &MediaContent, style: &Style) -> u32 {
     let line = |s: &str, font| text_height(s, font, style, f32::INFINITY);
     let spacing = style.spacing as f32;
-    let mut info = line(c.title, SUMMARY_FONT);
+    let mut info = line(c.title, summary_font(style));
     if !c.artist.is_empty() {
-        info += spacing + line(c.artist, BODY_FONT);
+        info += spacing + line(c.artist, body_font(style));
     }
-    info += spacing + line("Play", BODY_FONT) + 2.0 * style.action.padding as f32;
+    info += spacing + line("Play", body_font(style)) + 2.0 * style.action.padding as f32;
     (info.max(c.cover_size as f32) + 2.0 * inset(style) as f32).ceil() as u32
 }
 
@@ -214,7 +214,7 @@ pub fn media_view<'a>(c: MediaContent<'a>, style: &'a Style) -> Element<'a, Medi
     let media_button = |content: &'static str, event: MediaEvent| {
         let action = action.clone();
         button(
-            label(content, BODY_FONT)
+            label(content, body_font(style))
                 .align_x(Horizontal::Center)
                 .width(Length::Fill),
         )
@@ -242,9 +242,10 @@ pub fn media_view<'a>(c: MediaContent<'a>, style: &'a Style) -> Element<'a, Medi
         media_button("Next", MediaEvent::Next),
     ]
     .spacing(style.spacing);
-    let mut info = column![label(c.title, SUMMARY_FONT).width(Length::Fill)].spacing(style.spacing);
+    let mut info =
+        column![label(c.title, summary_font(style)).width(Length::Fill)].spacing(style.spacing);
     if !c.artist.is_empty() {
-        info = info.push(label(c.artist, BODY_FONT).width(Length::Fill));
+        info = info.push(label(c.artist, body_font(style)).width(Length::Fill));
     }
     info = info.push(buttons);
     // long titles are cut off instead of widening the surface

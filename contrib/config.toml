@@ -45,7 +45,13 @@ scroll_up = []
 scroll_down = []
 
 [style]
+# font family, e.g. "Fira Sans"; default: the system's sans-serif
+# font = "Fira Sans"
 font_size = 14
+# body lines shown at most, the rest is cut off with "…"; 0 = all
+max_lines = 10
+# the app name, small, above the summary
+show_app_name = false
 padding = 12
 spacing = 8
 icon_size = 48
