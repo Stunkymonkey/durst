@@ -406,15 +406,7 @@ pub fn view<'a>(c: Content<'a>, style: &'a Style, width: u32) -> Element<'a, Eve
         texts = texts.push(grid);
     }
 
-    let icon = c.icon.map(|icon| {
-        let size = Length::Fixed(style.icon_size as f32);
-        match icon {
-            Icon::Svg(path) => {
-                Element::from(svg(svg::Handle::from_path(path)).width(size).height(size))
-            }
-            Icon::Raster(handle) => image(handle.clone()).width(size).height(size).into(),
-        }
-    });
+    let icon = c.icon.map(|icon| icon_view(icon, style.icon_size));
     let content = match (icon, c.icon_right) {
         (None, _) => row![texts],
         (Some(icon), false) => row![icon, texts],
@@ -434,6 +426,18 @@ pub fn view<'a>(c: Content<'a>, style: &'a Style, width: u32) -> Element<'a, Eve
         .on_enter(Event::Hover(true))
         .on_exit(Event::Hover(false))
         .into()
+}
+
+/// An icon drawn at `size` x `size`.
+pub(super) fn icon_view<'a, E: 'a>(icon: &'a Icon, size: u32) -> Element<'a, E> {
+    let size = Length::Fixed(size as f32);
+    match icon {
+        Icon::Svg(path) => svg(svg::Handle::from_path(path))
+            .width(size)
+            .height(size)
+            .into(),
+        Icon::Raster(handle) => image(handle.clone()).width(size).height(size).into(),
+    }
 }
 
 /// The surface's box: background, border and padding.

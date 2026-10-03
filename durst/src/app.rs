@@ -182,6 +182,9 @@ pub struct App {
     signals: Option<futures::channel::mpsc::UnboundedSender<Signal>>,
     /// requests xdg-activation tokens, if the compositor supports it
     activator: Option<wayland::Activator>,
+    /// volume OSD icons by theme name (`None`: not in the theme), loaded in
+    /// `sync` before the view needs them
+    osd_icons: HashMap<&'static str, Option<Icon>>,
     /// state shared with the control interface, and the last published one
     status: Option<Arc<Mutex<Status>>>,
     published: Status,
@@ -246,6 +249,7 @@ impl App {
             conn: None,
             signals: None,
             activator: None,
+            osd_icons: HashMap::new(),
             status: None,
             published: Status::default(),
             prepared: HashMap::new(),
@@ -772,6 +776,16 @@ impl App {
         }
     }
 
+    /// Shows the last closed notification again; `None` if there is none.
+    fn history_pop(&mut self) -> Option<(u32, Task<Message>)> {
+        let mut n = self.history.pop()?;
+        let id = n.id;
+        if self.config.history.sticky {
+            n.expire_timeout = 0;
+        }
+        Some((id, self.receive(n, false)))
+    }
+
     fn mouse_actions(&mut self, id: u32, actions: &[MouseAction]) -> Task<Message> {
         let mut tasks = Vec::new();
         let mut invoked = false;
@@ -795,6 +809,11 @@ impl App {
                         .map(str::to_owned);
                     if let Some(url) = url {
                         self.open_url(&url);
+                    }
+                }
+                MouseAction::HistoryPop => {
+                    if let Some((_, task)) = self.history_pop() {
+                        tasks.push(task);
                     }
                 }
             }
@@ -884,6 +903,7 @@ impl App {
 
     /// Opens, moves, resizes and closes surfaces to match the store.
     fn sync(&mut self, now: Instant) -> Task<Message> {
+        self.load_osd_icon();
         let general = &self.config.general.clone();
         self.store
             .update_timers(general, now, self.idle || self.locked);
@@ -1115,14 +1135,8 @@ impl App {
                     .collect();
                 (Reply::Notifications(list), Task::none())
             }
-            Command::HistoryPop => match self.history.pop() {
-                Some(mut n) => {
-                    let id = n.id;
-                    if self.config.history.sticky {
-                        n.expire_timeout = 0;
-                    }
-                    (Reply::Id(id), self.receive(n, false))
-                }
+            Command::HistoryPop => match self.history_pop() {
+                Some((id, task)) => (Reply::Id(id), task),
                 None => (Reply::NotFound("the history is empty".into()), Task::none()),
             },
             Command::HistoryClear => {
@@ -1354,12 +1368,44 @@ impl App {
     fn osd_content(&self) -> Option<osd::VolumeContent<'_>> {
         let state = self.osd.as_ref()?;
         let volume = self.volumes.get(&state.target)?.as_ref()?;
+        let percent = state.drag.unwrap_or(volume.percent);
         Some(osd::VolumeContent {
             title: &volume.description,
-            percent: state.drag.unwrap_or(volume.percent),
+            percent,
             muted: volume.muted,
             max: self.config.osd.volume.max_volume,
+            icon: self
+                .osd_icons
+                .get(self.osd_icon_name()?)
+                .and_then(Option::as_ref),
         })
+    }
+
+    /// The icon the volume OSD shows now, if it is shown.
+    fn osd_icon_name(&self) -> Option<&'static str> {
+        let state = self.osd.as_ref()?;
+        let volume = self.volumes.get(&state.target)?.as_ref()?;
+        let percent = state.drag.unwrap_or(volume.percent);
+        Some(osd::volume_icon_name(
+            state.target == Target::Source,
+            percent,
+            volume.muted,
+        ))
+    }
+
+    fn load_osd_icon(&mut self) {
+        let Some(name) = self.osd_icon_name() else {
+            return;
+        };
+        if !self.osd_icons.contains_key(name) {
+            let size = self.config.style(Urgency::Normal).icon_size;
+            let theme = self.config.general.icon_theme.as_deref();
+            let icon = icons::resolve_name(name, size, theme);
+            if icon.is_none() {
+                log::debug!("no icon {name} in the icon theme");
+            }
+            self.osd_icons.insert(name, icon);
+        }
     }
 
     fn show_osd(&mut self, target: Target) {
@@ -1522,6 +1568,7 @@ impl App {
     fn apply_config(&mut self, config: Config) -> Task<Message> {
         log::info!("config reloaded");
         self.config = config;
+        self.osd_icons.clear();
         self.history.set_capacity(self.config.history.length);
         let reevaluate = self.reevaluate();
         let keys: Vec<SurfaceKey> = self.surfaces.keys().cloned().collect();

@@ -47,7 +47,7 @@ in [section 8](#8-missing-parts) everything that is still missing.
 | IPC | Own D-Bus interface `org.durst_notification.Durst1` on the session bus |
 | CLI | Own noun–verb design (not dunstctl-compatible); no bar subscribe stream |
 | Volume | Native PipeWire (`pipewire-rs` 0.10): default sink and source, volume + mute, through device routes like WirePlumber's mixer |
-| Volume OSD | Interactive: slider (click, drag, scroll), mute button; stays open while hovered |
+| Volume OSD | Interactive: slider (click, drag, scroll), mute button, icon from the theme for level and mute; stays open while hovered |
 | Media | MPRIS; OSD on song change with cover, title, artist and prev / play-pause / next |
 | Sound | A configurable player command (default `pw-play`), freedesktop sound themes |
 | Distribution | Nix flake package, systemd user unit, D-Bus activation for both bus names |
@@ -172,7 +172,7 @@ scripts/visual/       visual test harness and scenarios
 ### 4.3 Mouse
 
 Per button (`left`, `middle`, `right`, `scroll_up`, `scroll_down`) a list of
-`none`, `close_current`, `close_all`, `do_action`, `open_url`. Defaults as in
+`none`, `close_current`, `close_all`, `do_action`, `open_url`, `history_pop`. Defaults as in
 dunst: left closes, middle invokes the default action and closes, right
 closes all.
 
@@ -304,11 +304,11 @@ Notes on deviations, per milestone:
 
 ## 6. Testing
 
-- **Unit (58 tests):** core logic with injected time (timers, sorting,
+- **Unit (59 tests):** core logic with injected time (timers, sorting,
   duplicates, stack tags, held entries, history, rules, modes, media players,
   layout), config parsing and errors, markup, hint and metadata parsing, pod
   encoding, sound and cover helpers.
-- **Visual (39 scenarios):** `scripts/visual/run.sh` runs durst in an
+- **Visual (41 scenarios):** `scripts/visual/run.sh` runs durst in an
   isolated headless sway with a private D-Bus session, a fake logind, a
   private PipeWire with a null sink and source, and fake MPRIS players; mouse
   input via a virtual pointer. Scenarios send notifications, click, drag,
@@ -354,9 +354,7 @@ Notes on deviations, per milestone:
 
 9. **Icon size range** (min/max instead of one fixed `icon_size`) and
    `icon_position = "top"`.
-11. **Volume OSD icon** reflecting level and mute.
 12. **Per-rule `anchor`/`output`** (needs one stack per anchor).
-13. **`history_pop` mouse action.**
 14. **Focus by activation token:** the token carries no input serial, so
     sway only marks the app's window urgent instead of focusing it (tested;
     other compositors not). A serial needs iced_layershell to pass on the
@@ -383,5 +381,5 @@ Notes on deviations, per milestone:
    scenario).
 2. Verify items 1–2 on the real system (with explicit consent for the
    volume change).
-3. Item 11 (looks), 13 (`history_pop` on a mouse button).
+3. Item 9 (icon size range), then 12 (per-rule anchor/output) if wanted.
 4. PR to `master` of durst-notification/durst (conflicts in 5 files).

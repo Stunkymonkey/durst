@@ -36,6 +36,7 @@ length = 20
 sticky = true
 
 # per button: a list of none | close_current | close_all | do_action | open_url
+# | history_pop
 # do_action invokes the "default" action, or the only action if there is one
 [mouse]
 left = ["close_current"]
