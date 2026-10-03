@@ -13,7 +13,8 @@ const MAX_BYTES: u64 = 10 * 1024 * 1024;
 pub async fn load(url: String, size: u32) -> Option<Handle> {
     let result = tokio::task::spawn_blocking(move || {
         let bytes = fetch(&url)?;
-        let img = ::image::load_from_memory(&bytes).map_err(|e| format!("{url}: {e}"))?;
+        let img = super::icons::decode(::image::ImageReader::new(std::io::Cursor::new(&bytes)))
+            .map_err(|e| format!("{url}: {e}"))?;
         Ok::<_, String>(super::icons::scaled(img.into_rgba8(), size))
     })
     .await;
