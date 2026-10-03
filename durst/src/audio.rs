@@ -59,6 +59,8 @@ pub enum Event {
     Ready(Handle),
     /// the volume of the target's default node; `None`: there is none
     Changed(Target, Option<Volume>),
+    /// PipeWire went away (e.g. restarted); a `Ready` follows on reconnect
+    Disconnected,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,21 +91,32 @@ pub fn subscription() -> Subscription<Event> {
     Subscription::run(stream)
 }
 
+/// Runs the PipeWire thread, and again whenever it ends (PipeWire missing or
+/// restarted).
 fn stream() -> impl Stream<Item = Event> {
     iced::stream::channel(16, async |mut output| {
-        let (tx, mut rx) = unbounded();
-        std::thread::Builder::new()
-            .name("pipewire".into())
-            .spawn(move || {
-                if let Err(e) = run(tx) {
-                    log::warn!("volume control unavailable: {e}");
+        let mut backoff = crate::retry::Backoff::new("volume control");
+        loop {
+            backoff.attempt();
+            let (tx, mut rx) = unbounded();
+            let (done_tx, done_rx) = futures::channel::oneshot::channel();
+            std::thread::Builder::new()
+                .name("pipewire".into())
+                .spawn(move || {
+                    let result = run(tx).map_or_else(|e| e.to_string(), |()| "disconnected".into());
+                    let _ = done_tx.send(result);
+                })
+                .expect("spawn pipewire thread");
+            while let Some(event) = rx.next().await {
+                if output.send(event).await.is_err() {
+                    return;
                 }
-            })
-            .expect("spawn pipewire thread");
-        while let Some(event) = rx.next().await {
-            if output.send(event).await.is_err() {
-                break;
             }
+            if output.send(Event::Disconnected).await.is_err() {
+                return;
+            }
+            let reason = done_rx.await.unwrap_or_else(|_| "thread ended".into());
+            backoff.failed(reason).await;
         }
     })
 }

@@ -117,6 +117,9 @@ scripts/visual/       visual test harness and scenarios
 - Blocking or long work runs elsewhere: PipeWire and Wayland on own threads,
   MPRIS/logind/config watching as async tasks, scripts/sounds/browser as
   child processes, covers in `spawn_blocking`.
+- PipeWire, MPRIS and logind reconnect by themselves when their connection
+  ends or isn't there at startup (`retry.rs`: 1 s, doubling up to 30 s; only
+  the first failure in a row is a warning).
 
 ### 3.3 Surfaces
 
@@ -296,11 +299,11 @@ Notes on deviations, per milestone:
 
 ## 6. Testing
 
-- **Unit (54 tests):** core logic with injected time (timers, sorting,
+- **Unit (55 tests):** core logic with injected time (timers, sorting,
   duplicates, stack tags, held entries, history, rules, modes, media players,
   layout), config parsing and errors, markup, hint and metadata parsing, pod
   encoding, sound and cover helpers.
-- **Visual (34 scenarios):** `scripts/visual/run.sh` runs durst in an
+- **Visual (35 scenarios):** `scripts/visual/run.sh` runs durst in an
   isolated headless sway with a private D-Bus session, a fake logind, a
   private PipeWire with a null sink and source, and fake MPRIS players; mouse
   input via a virtual pointer. Scenarios send notifications, click, drag,
@@ -309,7 +312,8 @@ Notes on deviations, per milestone:
   signals, `durstctl`, `pw-dump` and the players' call logs.
   `scripts/visual/run-all.sh` runs all; `REPEAT=N` catches races.
 - **CI:** `.github/workflows/rust.yml` runs fmt, clippy, tests, all visual
-  scenarios and the package build via nix (never run on GitHub yet).
+  scenarios and the package build via nix; passes on GitHub (PR #1 in the
+  fork).
 - **Manual:** `scripts/notify-test.sh`; daily use on sway.
 
 ## 7. Risks
@@ -338,8 +342,8 @@ Notes on deviations, per milestone:
    tested.
 3. **Other compositors** (Hyprland, niri, river): only sway is tested.
 4. **HiDPI** output scaling (layout and R7).
-5. **CI on GitHub** has never run; the package build fails on the configured
-   remote Nix builder (likely its disk), it was built locally.
+5. **Remote Nix builder:** the package build fails on the configured remote
+   builder (likely its disk); it builds locally and in CI.
 
 ### Planned but not built
 
@@ -357,8 +361,6 @@ Notes on deviations, per milestone:
 13. **`history_pop` mouse action.**
 14. **`ActivationToken` signal** (xdg-activation, so actions can focus the
     app) and the `hlcolor` hint.
-15. **Reconnecting:** if PipeWire restarts, volume control stays gone until
-    durst restarts; same for a lost MPRIS/logind connection.
 16. **Size limit for `image-data`** hints (covers have 10 MB, image hints
     none).
 17. **Markup fuzzing** (`cargo fuzz` target).
@@ -383,5 +385,5 @@ Notes on deviations, per milestone:
    scenario).
 2. Verify items 1–2 on the real system (with explicit consent for the
    volume change).
-3. Items 7, 15 (robustness), then 6, 10, 11 (looks).
-4. PR to `master`, run CI on GitHub.
+3. Item 7 (robustness), then 6, 10, 11 (looks).
+4. PR to `master` of durst-notification/durst (conflicts in 5 files).

@@ -8,6 +8,7 @@ mod dbus;
 mod effects;
 mod logind;
 mod mpris;
+mod retry;
 mod ui;
 mod wayland;
 
