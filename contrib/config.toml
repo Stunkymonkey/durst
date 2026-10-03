@@ -17,7 +17,8 @@ sort_by_urgency = true
 newest_first = false
 # merge identical notifications into one with a counter
 stack_duplicates = true
-# "focused" (the stack stays on that output until it is empty), "all" or "name:<output>"
+# "focused": the output of the focused window when the first notification
+# appears; the stack stays there until it is empty. Or "all", or "name:<output>"
 output = "focused"
 # command to open links, the URL is appended
 browser = ["xdg-open"]
