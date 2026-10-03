@@ -324,7 +324,14 @@ impl Default for Mouse {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default, deny_unknown_fields)]
 pub struct Style {
+    /// font family name; `None`: the system's sans-serif
+    #[serde(deserialize_with = "font_family")]
+    pub font: Option<&'static str>,
     pub font_size: f32,
+    /// body lines shown at most, the rest is cut off with "…"; 0 = all
+    pub max_lines: u32,
+    /// the app name, small, above the summary
+    pub show_app_name: bool,
     /// inner space between border and content
     pub padding: u32,
     /// space between icon and text, and between the parts of the text
@@ -345,7 +352,10 @@ pub struct Style {
 impl Default for Style {
     fn default() -> Self {
         Self {
+            font: None,
             font_size: 14.0,
+            max_lines: 10,
+            show_app_name: false,
             padding: 12,
             spacing: 8,
             icon_size: 48,
@@ -500,6 +510,23 @@ fn parse_color(s: &str) -> Result<Color, String> {
 
 fn color<'de, D: Deserializer<'de>>(d: D) -> Result<Color, D::Error> {
     parse_color(&String::deserialize(d)?).map_err(de::Error::custom)
+}
+
+/// iced wants font families as `&'static str`: each distinct name is leaked
+/// once, so config reloads don't leak more.
+fn font_family<'de, D: Deserializer<'de>>(d: D) -> Result<Option<&'static str>, D::Error> {
+    static NAMES: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    let name = String::deserialize(d)?;
+    let mut names = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    let name = match names.iter().find(|n| **n == name) {
+        Some(n) => *n,
+        None => {
+            let n: &'static str = name.leak();
+            names.push(n);
+            n
+        }
+    };
+    Ok(Some(name))
 }
 
 /// Merges `over` into `base`; nested tables are merged, other values replaced.
