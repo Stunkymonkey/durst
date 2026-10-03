@@ -221,6 +221,11 @@ slider (up to `max_volume`), percent, mute button (fixed width), scroll by
 `step`; shown on `durstctl volume` and (configurable) on external changes;
 `--mic` for the default source.
 
+Verified on real hardware (2026-10-04): `durstctl volume set ±5`, `mute
+on/off` and `--mic` through the device routes of a Bluetooth speaker
+(hardware volume) and a USB headset (ALSA); durst, `wpctl` and the route's
+`channelVolumes` (the cube of the percent) agreed after every step.
+
 ### 4.9 Media OSD
 
 MPRIS players from startup and `NameOwnerChanged`; the active player is the
@@ -342,10 +347,6 @@ Notes on deviations, per milestone:
 
 ### Not verified on real systems
 
-1. **Volume through a hardware route.** Reading matched `wpctl` on real
-   hardware; *writing* through a device route is only tested on the
-   sandbox's null sink (node props path). Needs one check on a real sound
-   card.
 2. **Real media players** (Spotify, Firefox, mpv): only the fake player is
    tested.
 3. **Other compositors** (Hyprland, niri, river): only sway is tested.
@@ -380,7 +381,6 @@ Notes on deviations, per milestone:
 
 1. Finish the daily-driver test, fix what comes up (each fix with a
    scenario).
-2. Verify items 1–2 on the real system (with explicit consent for the
-   volume change).
+2. Verify item 2 (real media players) on the real system.
 3. Item 12 (per-rule anchor/output) if wanted.
 4. PR to `master` of durst-notification/durst (conflicts in 5 files).
