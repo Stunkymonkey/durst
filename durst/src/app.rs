@@ -93,6 +93,8 @@ struct Surface {
     opened: bool,
     size: (u32, u32),
     margin: Margin,
+    /// the output it was opened on; `None`: the compositor chose
+    output: Option<String>,
 }
 
 /// A notification as received, what the rules made of it, and its parsed
@@ -161,6 +163,11 @@ pub struct App {
     /// a focused window is fullscreen
     fullscreen: bool,
     outputs: Vec<String>,
+    /// the output of the focused window, from wlr-foreign-toplevel
+    focused_output: Option<String>,
+    /// with `output = "focused"`: where the stack is, while it is shown;
+    /// it stays together there and moves to the focus once it is empty
+    stack_output: Option<Option<String>>,
     audio: Option<audio::Handle>,
     volumes: HashMap<Target, Option<Volume>>,
     osd: Option<VolumeOsd>,
@@ -222,6 +229,8 @@ impl App {
             locked: false,
             fullscreen: false,
             outputs: Vec::new(),
+            focused_output: None,
+            stack_output: None,
             audio: None,
             volumes: HashMap::new(),
             osd: None,
@@ -318,6 +327,29 @@ impl App {
             Message::Wayland(wayland::Event::Outputs(outputs)) => {
                 log::debug!("outputs: {outputs:?}");
                 self.outputs = outputs;
+                // surfaces on a removed output are gone: open them again
+                let gone: Vec<SurfaceKey> = self
+                    .surfaces
+                    .iter()
+                    .filter(|(_, s)| s.output.as_ref().is_some_and(|o| !self.outputs.contains(o)))
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                if self
+                    .stack_output
+                    .as_ref()
+                    .is_some_and(|o| o.as_ref().is_some_and(|o| !self.outputs.contains(o)))
+                {
+                    self.stack_output = None;
+                }
+                Task::batch(
+                    gone.iter()
+                        .map(|key| self.remove_surface(key))
+                        .collect::<Vec<_>>(),
+                )
+            }
+            Message::Wayland(wayland::Event::FocusedOutput(output)) => {
+                log::debug!("focused output: {output:?}");
+                self.focused_output = output;
                 Task::none()
             }
             Message::ConfigChanged => {
@@ -820,7 +852,15 @@ impl App {
         let margins = self.store.margins(general, more_height);
 
         let mut tasks = Vec::new();
-        let was_empty = self.surfaces.is_empty();
+        // the stack stays where it opened until it is empty
+        let stack_shown = wanted
+            .iter()
+            .any(|(key, _)| matches!(key, Key::Notification(_) | Key::More));
+        match (stack_shown, &self.stack_output) {
+            (true, None) => self.stack_output = Some(self.focused_output.clone()),
+            (false, Some(_)) => self.stack_output = None,
+            _ => {}
+        }
         // the outputs each key is shown on
         let outputs: Vec<Option<String>> = match &general.output {
             Output::All => self.outputs.iter().cloned().map(Some).collect(),
@@ -892,6 +932,15 @@ impl App {
                     }
                 }
                 None => {
+                    let output = match (&general.output, &skey) {
+                        (_, (_, Some(name))) | (Output::Name(name), _) => Some(name.clone()),
+                        (_, (Key::Notification(_) | Key::More, None)) => {
+                            self.stack_output.clone().flatten()
+                        }
+                        // the OSDs open where the focus is
+                        _ => self.focused_output.clone(),
+                    };
+                    log::debug!("open {skey:?} on {output:?}");
                     let (window, open) = Message::layershell_open(NewLayerShellSettings {
                         size: Some(size),
                         layer: Layer::Overlay,
@@ -899,11 +948,10 @@ impl App {
                         exclusive_zone: None,
                         margin: Some(margin),
                         keyboard_interactivity: KeyboardInteractivity::None,
-                        output_option: match (&general.output, &skey.1) {
-                            (_, Some(name)) | (Output::Name(name), None) => {
-                                OutputOption::OutputName(name.clone())
-                            }
-                            _ => OutputOption::LastOutput,
+                        output_option: match &output {
+                            Some(name) => OutputOption::OutputName(name.clone()),
+                            // no focused window: the compositor decides
+                            None => OutputOption::Active,
                         },
                         events_transparent: false,
                         namespace: Some(NAMESPACE.to_string()),
@@ -916,6 +964,7 @@ impl App {
                             opened: false,
                             size,
                             margin,
+                            output,
                         },
                     );
                     tasks.push(open);
@@ -923,10 +972,6 @@ impl App {
             }
         }
 
-        // with an empty stack, the next notification may go to another output
-        if !was_empty && self.surfaces.is_empty() && general.output == Output::Focused {
-            tasks.push(Task::done(Message::ForgetLastOutput));
-        }
         tasks.push(self.publish_status());
         Task::batch(tasks)
     }
@@ -1053,8 +1098,9 @@ impl App {
                     locked: self.locked,
                     fullscreen: self.fullscreen,
                     outputs: self.outputs.clone(),
+                    focused_output: self.focused_output.clone().unwrap_or_default(),
                 };
-                (Reply::Info(info), Task::none())
+                (Reply::Info(Box::new(info)), Task::none())
             }
             Command::Modes(change) => {
                 match change {

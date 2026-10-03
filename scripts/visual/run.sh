@@ -35,6 +35,7 @@
 #   player_calls NAME   the methods called on it so far, one line
 #   player_stop NAME    and gone again
 #   serve DIR           serve DIR over HTTP on 127.0.0.1, prints the base URL
+#   window_on OUTPUT    open a black window on OUTPUT (which gets the focus)
 #   fullscreen_window   open a black window and make it fullscreen;
 #   leave_fullscreen    and close it again (it would disturb measurements)
 # A line `# outputs: N` in the scenario gives sway N outputs side by side
@@ -277,9 +278,17 @@ state() {
 }
 lock() { echo lock >&4; sleep 0.3; }
 unlock() { echo unlock >&4; sleep 0.3; }
+window_on() {
+    local id="durst-w$RANDOM"
+    swaymsg -q focus output "$1"
+    swaymsg -q exec "foot --app-id $id -o colors-dark.background=000000 \
+        -o colors-dark.foreground=000000 -o colors-dark.cursor='000000 000000' sleep 600"
+    wait_for sh -c "swaymsg -t get_tree | grep -q '\"app_id\": \"$id\"'"
+    sleep 0.5
+}
 fullscreen_window() {
-    swaymsg -q exec "foot --app-id durst-test -o colors.background=000000 \
-        -o colors.foreground=000000 -o cursor.color='000000 000000' sleep 600"
+    swaymsg -q exec "foot --app-id durst-test -o colors-dark.background=000000 \
+        -o colors-dark.foreground=000000 -o colors-dark.cursor='000000 000000' sleep 600"
     wait_for sh -c "swaymsg -t get_tree | grep -q '\"app_id\": \"durst-test\"'"
     swaymsg -q '[app_id=durst-test] fullscreen enable'
     sleep 0.5

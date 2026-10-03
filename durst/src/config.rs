@@ -261,8 +261,9 @@ impl Anchor {
 /// `"focused"`, `"all"` or `"name:<output>"`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output {
-    /// the output with keyboard focus when the first notification appears;
-    /// the stack stays there until it is empty
+    /// the output of the focused window when the first notification
+    /// appears (the compositor decides if there is none); the stack stays
+    /// there until it is empty
     Focused,
     /// every notification on every output
     All,

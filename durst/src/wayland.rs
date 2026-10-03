@@ -1,6 +1,7 @@
 //! durst's own Wayland connection, next to iced_layershell's: whether the
-//! user is idle (ext-idle-notify-v1), whether a focused window is fullscreen
-//! (wlr-foreign-toplevel-management) and the names of the outputs.
+//! user is idle (ext-idle-notify-v1), whether the focused window is
+//! fullscreen and which output it is on (wlr-foreign-toplevel-management),
+//! and the names of the outputs.
 //!
 //! It runs on its own thread with a blocking event loop; events reach the UI
 //! loop through a subscription. Missing protocols are logged and skipped.
@@ -29,6 +30,9 @@ pub enum Event {
     Fullscreen(bool),
     /// the names of all outputs, sorted
     Outputs(Vec<String>),
+    /// the output of the focused window; `None` without one (e.g. an empty
+    /// workspace), then the compositor decides
+    FocusedOutput(Option<String>),
 }
 
 /// The Wayland events; restarted when `idle_threshold` changes (`None`: no
@@ -64,6 +68,8 @@ struct Toplevel {
     fullscreen: bool,
     /// state sent before the next `done`
     pending: Option<(bool, bool)>,
+    /// the outputs the window is on, in the order it entered them
+    outputs: Vec<ObjectId>,
 }
 
 struct State {
@@ -77,6 +83,7 @@ struct State {
     toplevels: HashMap<ObjectId, Toplevel>,
     sent_fullscreen: bool,
     sent_outputs: Vec<String>,
+    sent_focused_output: Option<String>,
 }
 
 impl State {
@@ -102,6 +109,22 @@ impl State {
             self.sent_fullscreen = fullscreen;
             self.send(Event::Fullscreen(fullscreen));
         }
+        self.update_focused_output();
+    }
+
+    fn update_focused_output(&mut self) {
+        let focused = self.toplevels.values().find(|t| t.activated).and_then(|t| {
+            t.outputs.iter().find_map(|id| {
+                self.outputs
+                    .values()
+                    .find(|(output, _)| &output.id() == id)
+                    .and_then(|(_, name)| name.clone())
+            })
+        });
+        if focused != self.sent_focused_output {
+            self.sent_focused_output = focused.clone();
+            self.send(Event::FocusedOutput(focused));
+        }
     }
 
     fn update_outputs(&mut self) {
@@ -115,6 +138,7 @@ impl State {
             self.sent_outputs = names.clone();
             self.send(Event::Outputs(names));
         }
+        self.update_focused_output();
     }
 }
 
@@ -133,6 +157,7 @@ fn run(idle_millis: u32, tx: UnboundedSender<Event>) -> Result<(), String> {
         toplevels: HashMap::new(),
         sent_fullscreen: false,
         sent_outputs: Vec::new(),
+        sent_focused_output: None,
     };
     queue.roundtrip(&mut state).map_err(|e| e.to_string())?;
     if state.idle_notifier.is_none() && idle_millis > 0 {
@@ -275,6 +300,12 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for State {
                     states.contains(&(S::Fullscreen as u32)),
                 ));
             }
+            E::OutputEnter { output } => {
+                if !toplevel.outputs.contains(&output.id()) {
+                    toplevel.outputs.push(output.id());
+                }
+            }
+            E::OutputLeave { output } => toplevel.outputs.retain(|id| *id != output.id()),
             E::Done => {
                 if let Some((activated, fullscreen)) = toplevel.pending.take() {
                     toplevel.activated = activated;
