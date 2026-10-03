@@ -5,564 +5,381 @@ durst is a Wayland-only notification daemon written in Rust, inspired by
 displays (OSDs) for **volume** and **media playback**, and everything can be
 controlled with **mouse clicks** and the **`durstctl` CLI**.
 
-This document is the target design. It records the decisions made so far, the
-architecture, the feature specification and the order of implementation.
+This document describes durst **as built** (state: 2026-10-03, branch
+`iced-layers`, not merged into `master` yet), the milestones, the risks, and
+in [section 8](#8-missing-parts) everything that is still missing.
 
 ---
 
 ## 1. Principles
 
 1. **Wayland only.** Rendering uses `wlr-layer-shell` via `iced_layershell`.
-   There is no X11 code path, and the `--force-output xorg|stdout` option is removed.
+   There is no X11 code path.
 2. **One daemon, one event loop.** A single long-running iced_layershell
-   *daemon*. D-Bus, PipeWire, MPRIS, idle and timers all feed it messages
-   through iced `Subscription`s.
-3. **Pure core, thin UI.** All notification logic (queue, timeouts, rules,
-   stacking, modes, history) lives in a `core` module with no iced or D-Bus
-   dependencies, and with time injected so it can be unit-tested
-   deterministically. The UI only renders state and forwards input.
+   *daemon*. D-Bus, PipeWire, MPRIS, Wayland state, logind, the config watcher
+   and timers all feed it messages through iced `Subscription`s.
+3. **Pure core, thin UI.** Notification logic (store, timers, rules, history,
+   layout, media players) lives in `core/` without iced or D-Bus types, with
+   time injected, and is unit-tested. The UI renders state and forwards input.
 4. **Never steal focus.** Surfaces use `KeyboardInteractivity::None`. Keyboard
    control works through compositor keybinds that call `durstctl`.
-5. **Spec first.** Implement the
+5. **Spec first.** The
    [Desktop Notifications Spec 1.2](https://specifications.freedesktop.org/notification-spec/latest/)
-   fully before adding extras.
+   is implemented before extras.
+6. **Every visible behavior has a visual scenario** (section 6) that checks
+   it by measuring screenshots, not by trusting durst's own state.
 
 ## 2. Decisions
 
-| Topic | Decision |
+| Topic | Decision (as built) |
 |---|---|
-| Notification surfaces | One layer surface **per notification**. durst computes the stack positions with margins and reflows the stack on close. |
-| Output | Configurable: `focused` (default), `name:<DP-1>`; `all` follows in M4 (needs output enumeration) |
-| Content | Body markup, icons & images, progress bar (`value` hint), action buttons |
-| Behavior | Urgency-based timeouts and styles, pause on idle, modes (DND etc.), duplicate stacking |
-| History | In memory as a ring buffer, popable (dunst-like) |
-| Rules | Match & restyle, hide/skip, run script, play sound, modes, fullscreen policy, content rewrite, action automation |
+| Notification surfaces | One layer surface **per notification**; durst predicts each height, stacks them with margins and reflows on changes |
+| Output | `focused` (default: the focused window's output, the stack stays there until empty), `all`, or `name:<output>` |
+| Content | Body markup, icons & images, progress bar (`value` hint), action buttons, duplicate counter |
+| Behavior | Urgency-based timeouts and styles; timers pause while hovered, idle or locked; modes (DND etc.) |
+| History | In memory as a ring buffer, popable (dunst-like); not persisted |
+| Rules | dunst-style `[[rule]]`s: match, rewrite, restyle, hide/skip/defer, fullscreen policy, actions, scripts, sounds |
 | Mouse | dunst defaults, every button configurable |
 | Keyboard | Never focused; CLI only |
-| Config | TOML at `$XDG_CONFIG_HOME/durst/config.toml`, hot-reloadable |
-| Theming | Structured style keys, per urgency and per rule |
-| D-Bus | `zbus` (async, pure Rust) replaces `dbus` + `dbus-tree` + codegen |
-| IPC | Our own D-Bus interface `org.durst_notification.Durst1` on the session bus |
-| CLI | Our own noun–verb design (not dunstctl-compatible); no bar subscribe stream |
-| Volume | Native PipeWire (`pipewire-rs`): default sink and default source, volume + mute |
-| Volume OSD | Popup with an **interactive** slider (drag, scroll) and a mute button. Stays open while hovered. |
-| Media | MPRIS over D-Bus. OSD pops up on track change (cover, title, artist) with prev / play-pause / next buttons |
-| Distribution | systemd user unit + D-Bus activation |
-| Order | Dunst parity → CLI → rules/modes → environment awareness → ops → volume OSD → media OSD |
+| Config | TOML at `$XDG_CONFIG_HOME/durst/config.toml`, watched and reloaded; errors are shown as a notification |
+| Theming | Structured style keys, per urgency and per rule (tables merged over the base style) |
+| D-Bus | `zbus` 5 (async, pure Rust) |
+| IPC | Own D-Bus interface `org.durst_notification.Durst1` on the session bus |
+| CLI | Own noun–verb design (not dunstctl-compatible); no bar subscribe stream |
+| Volume | Native PipeWire (`pipewire-rs` 0.10): default sink and source, volume + mute, through device routes like WirePlumber's mixer |
+| Volume OSD | Interactive: slider (click, drag, scroll), mute button; stays open while hovered |
+| Media | MPRIS; OSD on song change with cover, title, artist and prev / play-pause / next |
+| Sound | A configurable player command (default `pw-play`), freedesktop sound themes |
+| Distribution | Nix flake package, systemd user unit, D-Bus activation for both bus names |
 
 ## 3. Architecture
 
 ### 3.1 Workspace layout
 
 ```
-durst/            daemon (iced_layershell app)
+durst/                daemon
   src/
-    main.rs        arg parsing, logging, start daemon
-    app.rs         iced daemon: update/view/subscriptions, surface bookkeeping
-    core/          pure logic, no iced / zbus imports
-      notification.rs  Notification model, urgency, hints (typed)
-      store.rs         active set, waiting queue, history ring
-      timer.rs         expiry calculation, pause/resume (idle, hover)
-      rules.rs         matching + rule actions
-      stack.rs         duplicate stacking, stack-tag replacement
-      layout.rs        per-surface position/margin computation
-      modes.rs         active mode set
+    main.rs           arg parsing, logging, config loading, start
+    app.rs            the iced_layershell daemon: messages, surfaces (App::sync),
+                      control commands, OSD state
+    config.rs         TOML schema, defaults, style merging, validation
+    config_watch.rs   hot reload (notify crate, watches the directory)
+    effects.rs        spawning scripts, sounds (sound theme lookup), browser
+    wayland.rs        own Wayland connection: idle, fullscreen + focused output
+                      (wlr-foreign-toplevel), output names
+    logind.rs         session lock state (LockedHint)
+    audio.rs          PipeWire thread: default nodes, volume, mute, routes
+    mpris.rs          MPRIS client: players, metadata, remote control
+    core/             pure logic
+      notification.rs Notification model, urgency, typed hints, image data
+      store.rs        displayed / waiting / held entries, timers, sorting
+      layout.rs       stack margins
+      history.rs      ring buffer
+      rules.rs        matching + rule actions, modes, fullscreen policy
+      media.rs        players and the active one
     dbus/
-      notifications.rs org.freedesktop.Notifications server (zbus)
-      control.rs       org.durst_notification.Durst1 server (zbus)
-      mpris.rs         MPRIS client + player tracking
-    audio/
-      pipewire.rs      default sink/source volume+mute, change events
-    wayland/
-      idle.rs          ext-idle-notify-v1
-      toplevel.rs      wlr-foreign-toplevel-management (fullscreen detection)
+      mod.rs          one connection, both bus names
+      notifications.rs org.freedesktop.Notifications server, hint parsing
+      control.rs      org.durst_notification.Durst1 server
     ui/
-      notification.rs  notification view
-      osd_volume.rs    volume OSD view
-      osd_media.rs     media OSD view
-      markup.rs        spec markup → iced rich text spans
-      icons.rs         icon theme lookup, image-data decoding, cache
-      style.rs         config style → iced styles
-    config/
-      mod.rs           TOML schema (serde), defaults, validation
-      watch.rs         hot reload (notify crate)
-    sound.rs           sound playback
-    script.rs          rule scripts (env vars)
-durstctl/         CLI (clap) – thin client over the Durst1 D-Bus interface
-durst-proto/      shared: zbus proxy traits, serializable types (Mode, VolumeTarget, …)
-contrib/          durst.service, org.freedesktop.Notifications.service, example config
+      notification.rs notification view + height prediction, "+N more"
+      osd.rs          volume and media OSD views + height prediction
+      markup.rs       spec markup → rich text runs
+      icons.rs        icon lookup (freedesktop-icons), raster pre-scaling
+      cover.rs        cover art loading (file / http)
+durstctl/             CLI (clap), thin client over Durst1
+durst-proto/          shared: proxies and serializable types
+tools/                test helpers: vpointer, fake-logind, fake-player
+contrib/              example config, systemd unit, D-Bus service files
+scripts/visual/       visual test harness and scenarios
 ```
-
-`durst-proto` keeps the daemon and the CLI in sync at compile time.
 
 ### 3.2 Runtime data flow
 
 ```
-             ┌──────────────── iced_layershell daemon (single thread UI loop) ──────────────┐
- D-Bus  ───► │ Subscription(zbus Notifications) ─┐                                          │
- durstctl──► │ Subscription(zbus Control)  ──────┤                                          │
- PipeWire──► │ Subscription(pipewire thread) ────┤──► Message ──► update() ──► core::State ──┤
- MPRIS  ───► │ Subscription(mpris watcher) ──────┤                     │                    │
- Wayland ──► │ Subscription(idle / toplevel) ────┤                     ▼                    │
- timer  ───► │ Subscription(tick, only while needed)                Effects:               │
- mouse  ───► │ view() events ────────────────────┘   open/close/move surfaces, emit signals,│
-             │                                       run scripts, play sound, set volume    │
-             └──────────────────────────────────────────────────────────────────────────────┘
+ D-Bus (Notify, durstctl) ──┐
+ PipeWire thread ───────────┤
+ MPRIS task ────────────────┤
+ Wayland thread ────────────┼──► Message ──► App::update ──► state (Store, History,
+ logind task ───────────────┤                    │            Players, volumes, OSDs)
+ config watcher ────────────┤                    ▼
+ timer (only while needed) ─┤               App::sync: open / move / resize / close
+ mouse (view events) ───────┘               surfaces, publish status, emit signals
 ```
 
-- `core::State::handle(event, now) -> Vec<Effect>` is the single point where
-  logic happens. `app.rs` turns effects into iced `Task`s (layer-shell
-  `NewLayerShell` / `RemoveWindow` / `MarginChange` / `SizeChange`) or into
-  calls back into D-Bus, PipeWire or MPRIS.
-- D-Bus method calls that need a reply (`Notify` returns the id) are answered
-  inside the zbus task. The ID is allocated there with an atomic counter, then
-  the notification is forwarded to the UI loop over a channel.
-- Long-running external work (PipeWire main loop, scripts, sounds) runs on its
-  own threads or tokio tasks and only ever communicates through messages.
+- `App::update` handles a message, then `App::sync` reconciles the open
+  surfaces with the state. Surfaces only get changes after their `Opened`
+  event (R8).
+- `Notify` is answered inside the zbus task (id from an atomic counter); the
+  notification reaches the UI loop over a channel. Control commands are
+  answered by the UI loop over a oneshot channel; counts and modes are a
+  shared snapshot, published with `PropertiesChanged`.
+- Blocking or long work runs elsewhere: PipeWire and Wayland on own threads,
+  MPRIS/logind/config watching as async tasks, scripts/sounds/browser as
+  child processes, covers in `spawn_blocking`.
 
 ### 3.3 Surfaces
 
-Each window id maps to a `SurfaceKind`:
+`Key` = `Notification(id)`, `More` ("+N more"), `VolumeOsd`, `MediaOsd`; with
+`output = "all"` each key has one surface per output.
 
-```rust
-enum SurfaceKind { Notification(NotifId), VolumeOsd, MediaOsd }
-```
+- **Stack:** fixed width, predicted height (R1), anchored to the configured
+  corner, `offset + Σ(height + gap)` along the stacking axis. Beyond
+  `max_visible`, notifications wait and a "+N more" surface follows the stack.
+- **OSDs:** own anchor, offset and width; one instance each; repeated
+  triggers restart their timeout; hovering keeps them.
+- **Output:** `focused` pins the stack to the focused window's output until
+  the stack is empty (the compositor decides without a focused window); OSDs
+  open where the focus is. Surfaces on a removed output are reopened.
 
-- **Notification surfaces:** fixed width (config), height measured (see
-  risk R1). They are anchored to the configured corner. The margin along the
-  stacking axis is `offset + Σ(height_i + gap)` over the notifications above
-  them. Closing one sends `MarginChange` to all surfaces below it.
-- **`max_visible`:** notifications beyond the limit wait in the queue, and the
-  last visible slot can show "+N more".
-- **OSDs:** separate surfaces with their own anchor, margin and output. Only
-  one instance of each exists, and repeated triggers reset its hide timer.
-- **Output selection:** `focused` → layer surface with no output (the
-  compositor picks the focused one); `name:X` → the named output; `all` → one
-  surface per output for each item.
+## 4. Features (as built)
 
-## 4. Feature specification
+### 4.1 Notification spec
 
-### 4.1 Notification spec compliance
-
-- Methods: `Notify`, `CloseNotification`, `GetCapabilities`,
-  `GetServerInformation`.
-- Signals: `NotificationClosed(id, reason)` with reason 1 = expired,
-  2 = dismissed by user, 3 = `CloseNotification`/CLI, 4 = undefined;
-  `ActionInvoked(id, key)`; `ActivationToken(id, token)` when we have one
-  (xdg-activation, best effort).
-- `replaces_id`: update in place (same surface, re-layout if the height changes).
-- `expire_timeout`: `-1` → urgency default, `0` → never, `>0` → ms. The config
-  option `ignore_dbus_timeout` overrides it.
-- Capabilities: `actions`, `body`, `body-markup`, `body-hyperlinks`,
-  `icon-static`, `persistence`, `sound` (once sound playback exists),
-  `x-dunst-stack-tag`.
-- Hints: `urgency`, `category`, `desktop-entry`, `image-data` /
-  `image_data` / `icon_data`, `image-path` / `image_path`, `sound-file`,
+- Methods `Notify`, `CloseNotification`, `GetCapabilities`,
+  `GetServerInformation`; signals `NotificationClosed` (1 expired,
+  2 dismissed, 3 closed by the sender, 4 undefined: replaced or skipped) and
+  `ActionInvoked`.
+- `replaces_id` updates in place; `expire_timeout` -1 / 0 / ms, overridable
+  with `ignore_dbus_timeout`.
+- Capabilities: `actions`, `body`, `body-hyperlinks`, `body-markup`,
+  `icon-static`, `sound`, `x-dunst-stack-tag`.
+- Hints: `urgency`, `category`, `desktop-entry`, `image-data` (also
+  `image_data`, `icon_data`), `image-path` (also `image_path`), `sound-file`,
   `sound-name`, `suppress-sound`, `transient`, `resident`, `value`,
-  `x-dunst-stack-tag`, `x-canonical-private-synchronous`, `hlcolor`.
-  Hints are parsed once into a typed `Hints` struct instead of being kept as
-  `RefArg`s.
+  `x-dunst-stack-tag`, `x-canonical-private-synchronous`.
 
 ### 4.2 Display
 
-- Layout of one notification: icon (left/right/top/off), app name (optional),
-  summary, body, progress bar, action buttons. Text supports word wrap and
-  ellipsizing, with `max_lines` for the body.
-- **Markup:** `<b> <i> <u> <a href> <img>` (img → alt text). Everything else is
-  escaped or stripped. A small tolerant parser produces iced `rich_text` spans.
-  Links are clickable when `body-hyperlinks` is set.
-- **Icons:** lookup order is `image-data` → `image-path` → `app_icon` (path or
-  theme name) → `desktop-entry` icon → rule `default_icon`. Supports SVG and
-  raster images, with min/max icon size and a cache keyed by name and size.
-- **Progress:** the `value` hint renders a bar with an optional percentage.
-- **Actions:** buttons for each action (except `default`, which runs on click).
-- **Duplicates:** an identical app+summary+body+urgency increments a counter
-  ("×3") and resets the timer instead of creating a new surface.
-  `x-dunst-stack-tag` / `x-canonical-private-synchronous` replace the existing
-  notification with the same tag (volume/brightness scripts).
-- **Timers:** pause while the notification is hovered. They also pause for all
-  notifications while the user is idle or the session is locked (critical
-  notifications have no timer anyway).
+- Icon (left, right or off), summary (bold, with "(N)" for duplicates), body,
+  progress bar, action buttons (`default` runs on click instead).
+- Markup: `<b> <i> <u> <a href> <img alt> <br>` and entities; unknown tags are
+  dropped, text that isn't a tag stays text. Links are clickable.
+- Icons: `image-data` → `image-path` → `app_icon` → `desktop-entry` icon →
+  rule `default_icon`; theme lookup with GTK's theme or `icon_theme`, hicolor
+  fallback; raster images are scaled to `icon_size` by durst (R7).
+- Duplicates increase a counter; stack tags replace the older notification.
+- Sorting by urgency and/or arrival (`sort_by_urgency`, `newest_first`).
 
 ### 4.3 Mouse
 
-Configurable per button: `left`, `middle`, `right`, `scroll_up`,
-`scroll_down`. Each maps to a list of actions:
-
-`close_current`, `close_all`, `do_action` (default action, otherwise opens the
-first one), `open_url` (first link in the body), `history_pop`, `none`.
-
-Defaults (same as dunst): left = `close_current`, middle = `do_action, close_current`,
-right = `close_all`.
+Per button (`left`, `middle`, `right`, `scroll_up`, `scroll_down`) a list of
+`none`, `close_current`, `close_all`, `do_action`, `open_url`. Defaults as in
+dunst: left closes, middle invokes the default action and closes, right
+closes all.
 
 ### 4.4 Modes & DND
 
-- The daemon holds a **set** of active modes (mako-style), empty at start.
-  Modes like `dnd`, `work` or `gaming` exist only through the rules that use
-  them (`durstctl mode list --all` shows those).
-- Rules can match `mode = "dnd"` / `not_mode`. The rule action `defer = true`
-  holds a notification back: it is neither shown nor counted as waiting
-  ("held" in `durstctl notif list`), its timer doesn't run, and arrival side
-  effects (sound, scripts, auto_invoke) are skipped.
-- Whenever the modes (or the config) change, all rules run again on every
-  notification as originally received, so turning off `dnd` shows everything
-  that was held back.
-- The shipped example config contains:
-  `[[rule]] mode="dnd" not_urgency="critical" defer=true`.
+A set of active modes, empty at start. Rules match `mode` / `not_mode`;
+`defer = true` holds a notification (not shown, not counted as waiting, no
+timer, no arrival side effects). Changing modes or the config runs all rules
+again on the notifications as originally received.
 
 ### 4.5 Rules
 
-`[[rule]]` entries are evaluated in order, and each matching rule applies its
-actions (later rules override earlier ones), as in dunst.
-
-**Matchers** (all optional, AND-combined; strings are regexes):
-`app_name`, `summary`, `body`, `icon`, `category`, `desktop_entry`,
-`urgency`, `stack_tag`, `transient`, `mode`, `fullscreen_active`,
-`has_actions`, and `not_*` variants for negation.
-
-**Actions:**
+Evaluated in order; each sees the notification as earlier rules left it.
 
 | Group | Keys |
 |---|---|
-| Restyle | `style.*` (any style key), `icon`, `default_icon`, `icon_position`, `position`/`anchor`, `output` |
-| Timing | `timeout`, `urgency` (rewrite), `ignore_dbus_timeout` |
-| Visibility | `skip_display` (history only), `history_ignore`, `defer`, `transient` |
-| Content | `format` (template with `{app_name} {summary} {body} {count}`…), `hide_body`, `category`, `stack_tag` |
-| Fullscreen | `fullscreen = "show" \| "delay" \| "pushback"` |
-| Actions | `default_action` (action key for left-click), `auto_invoke` (action key run immediately) |
-| Side effects | `script` (run with `DURST_*` env vars), `script_on = "receive" \| "action" \| "close"`, `sound` (file path or sound-theme name), `mute_sound` |
+| Matchers | `app_name`, `summary`, `body`, `icon`, `category`, `desktop_entry`, `stack_tag` (regexes, each also `not_…`), `urgency`, `not_urgency`, `transient`, `has_actions`, `mode`, `not_mode`, `fullscreen_active` |
+| Content | `set_summary`, `set_body` (templates: `{app_name} {summary} {body} {category} {urgency}`), `hide_body`, `set_urgency`, `set_category`, `set_stack_tag`, `set_icon`, `set_transient` |
+| Display | `style`, `default_icon`, `icon_position`, `timeout` |
+| Visibility | `skip_display`, `history_ignore`, `defer`, `fullscreen = show \| delay \| pushback` |
+| Actions | `default_action`, `auto_invoke` |
+| Side effects | `script` + `script_on = receive \| action \| close` (`DURST_*` variables), `sound`, `mute_sound` |
 
 ### 4.6 History
 
-- Ring buffer of `[history] length` entries (default 20).
-- Expired and dismissed notifications go into history unless they are
-  `transient` (or `history_ignore`, M3). Notifications closed by their sender
-  (`CloseNotification`) or replaced by a duplicate/stack tag don't.
-- `durstctl history pop` re-shows the most recent one with its old id; with
-  `[history] sticky = true` (default) it doesn't expire again. `history list`
-  prints a table or JSON; `history clear` empties it.
+`[history] length` (default 20) expired or dismissed notifications, except
+transient or `history_ignore`d ones; `history pop` shows the newest again
+(sticky by default), without running the rules again.
 
 ### 4.7 Environment awareness
 
-- **Idle:** `ext-idle-notify-v1` with `idle_threshold` (default 120 s). While
-  idle, timers are frozen.
-- **Fullscreen:** `zwlr_foreign_toplevel_manager_v1` reports which toplevel is
-  activated and fullscreen. Each rule's fullscreen policy applies:
-  `show` shows normally, `delay` holds the notification until fullscreen ends,
-  and `pushback` hides it into the waiting queue. If the protocol isn't
-  available, durst falls back to `show` and logs one warning.
-- **Lock:** logind `LockedHint` on the session over system D-Bus is treated
-  the same as idle for timers.
+- Idle (`ext-idle-notify-v1`, `idle_threshold`) and lock (logind
+  `LockedHint`) pause all timers.
+- Fullscreen (focused window, wlr-foreign-toplevel) drives the rules'
+  fullscreen policy and the `fullscreen_active` matcher.
+- The focused window's output drives `output = "focused"`.
 
 ### 4.8 Volume OSD
 
-- **Backend:** a PipeWire thread tracks the default sink and default source
-  (via metadata `default.audio.sink/source`). It reads and writes the
-  `channelVolumes` and `mute` props, and sends a `VolumeChanged` message on
-  every change.
-- **UI:** an icon that reflects the level and mute state, a slider (0–100 %,
-  optionally up to `max_volume`, e.g. 150 %) and a mute button. Scrolling over
-  the OSD changes the volume by `step`. Drag updates are debounced (about 30 ms).
-- **When shown:** after a `durstctl volume …` command; on external changes if
-  `show_on_external_change = true`. Hides after `timeout`, except while hovered.
-- The microphone uses the same OSD in mic variant (`--mic`).
+PipeWire thread following the `default` metadata, node `Props` and device
+`Route`s; percent on the cubic scale of pavucontrol/wpctl. OSD: device name,
+slider (up to `max_volume`), percent, mute button (fixed width), scroll by
+`step`; shown on `durstctl volume` and (configurable) on external changes;
+`--mic` for the default source.
 
 ### 4.9 Media OSD
 
-- **Backend:** watches `org.mpris.MediaPlayer2.*` names. The active player is
-  the most recent one that changed to `Playing`, otherwise the last one
-  active. Metadata comes from `PropertiesChanged`.
-- **UI:** cover art (`mpris:artUrl`, either file:// or http(s), downloaded with
-  a timeout and cached), title, artist, prev / play-pause / next buttons.
-- **When shown:** on track change (configurable), and after `durstctl media …`
-  commands. Hides after `timeout`, except while hovered.
+MPRIS players from startup and `NameOwnerChanged`; the active player is the
+one that most recently started playing, else the last active. OSD: cover
+(`file://` or `http(s)://`, cached, placeholder while loading), title,
+artist, previous / play-pause / next (one width); shown on a change of the
+active song and on `durstctl media`.
 
 ### 4.10 CLI – `durstctl`
 
 ```
-durstctl notif   list [--json] | count [--waiting] | close [ID] | close-all
-                 action [ID] [KEY]          # default: newest, "default" key
+durstctl notif   list [--json] | count [--waiting|--held] | close [ID] | close-all
+                 action [ID] [KEY]
 durstctl history list [--json] | pop | clear | count
-durstctl mode    list | set <M>... | enable <M> | disable <M> | toggle <M>
-durstctl volume  get [--mic] | set <N|+N%|-N%> [--mic] | mute <on|off|toggle> [--mic]
+durstctl mode    list [--all] | set <M>... | enable <M> | disable <M> | toggle <M>
+durstctl volume  get [--mic] [--json] | set <N|+N|-N>[%] [--mic] | up | down [--mic]
+                 mute [on|off|toggle] [--mic]
 durstctl media   status [--json] | play | pause | toggle | next | prev
 durstctl osd     show <volume|mic|media>
 durstctl reload
-durstctl info [--json]                      # version, config path, active modes, counts
+durstctl info [--json]     # version, config, counts, modes, idle, locked,
+                           # fullscreen, outputs, focused output
 ```
 
-- Exit codes: 0 = ok, 1 = daemon not running, 2 = bad argument, 3 = nothing to
-  act on, 4 = invalid config (reload).
-- Shell completions and a man page are generated in `build.rs` (`clap_complete`, `clap_mangen`).
+Exit codes: 0 ok, 1 durst not running, 2 invalid argument, 3 nothing to act
+on, 4 invalid config. Man pages and shell completions are generated by the
+build.
 
 ### 4.11 Control D-Bus interface
 
-Bus name `org.durst_notification.Durst`, object `/org/durst_notification/Durst`,
-interface `org.durst_notification.Durst1`. Its methods map one-to-one to the CLI
-commands above. It also exposes the properties `ActiveModes`, `WaitingCount`,
-`DisplayedCount` and `HistoryCount` with `PropertiesChanged`, which keeps it
-scriptable through `busctl` even without a dedicated subscribe command.
+`org.durst_notification.Durst1` at `/org/durst_notification/Durst` on the bus
+name `org.durst_notification.Durst`: the methods behind every CLI command,
+properties `DisplayedCount`, `WaitingCount`, `HeldCount`, `HistoryCount` and
+`ActiveModes` with `PropertiesChanged`, errors `NotFound`, `InvalidConfig`,
+`InvalidArgument` (prefix `org.durst_notification.Error.`).
 
 ### 4.12 Configuration
 
-`$XDG_CONFIG_HOME/durst/config.toml`, which can be overridden with `-c`. An
-unknown key is an error, reported with its line and column. On reload, an
-invalid config keeps the old one and shows a critical notification from
-durst itself.
-
-```toml
-[general]
-output = "focused"          # "focused" | "all" | "name:DP-1"
-anchor = "top-right"
-offset = [20, 20]           # x, y
-gap = 8
-width = 380
-max_visible = 5
-history_length = 20
-idle_threshold = "120s"
-ignore_dbus_timeout = false
-
-[mouse]
-left = ["close_current"]
-middle = ["do_action", "close_current"]
-right = ["close_all"]
-
-[style]                      # base style
-font = "Inter 11"
-background = "#1e1e2ecc"
-foreground = "#cdd6f4"
-border = { width = 2, color = "#89b4fa", radius = 10 }
-padding = [10, 12]
-icon = { position = "left", min_size = 32, max_size = 64 }
-progress = { height = 6, color = "#89b4fa" }
-
-[urgency.low]
-timeout = "5s"
-style = { border.color = "#6c7086" }
-[urgency.normal]
-timeout = "10s"
-[urgency.critical]
-timeout = "0"
-style = { border.color = "#f38ba8" }
-
-[[rule]]
-mode = "dnd"
-not_urgency = "critical"
-defer = true
-
-[[rule]]
-app_name = "^(Signal|Element)$"
-hide_body = true
-sound = "message-new-instant"
-
-[[rule]]
-app_name = "^spotify$"
-skip_display = true          # the media OSD handles this
-
-[osd.volume]
-enabled = true
-anchor = "bottom"
-timeout = "2s"
-step = 5
-max_volume = 100
-show_on_external_change = true
-
-[osd.media]
-enabled = true
-anchor = "top"
-timeout = "4s"
-show_on_track_change = true
-```
+`contrib/config.toml` lists every option with its default and is parsed by
+a unit test, so it can't drift from the code. Sections: `[general]`,
+`[history]`, `[mouse]`, `[style]`, `[urgency.low|normal|critical]`
+(`timeout`, `style`), `[sound]`, `[osd.volume]`, `[osd.media]`, `[[rule]]`.
 
 ## 5. Milestones
 
-Each milestone ends with a working, tagged build.
-
-### M0 – Foundation (core rework) ✅ done 2026-10-01
-
-Outcome: iced 0.14 + iced_layershell 0.19.1 (pinned, `default-features = false`
-because its portal-based theme detection blocks startup), zbus 5, TOML config,
-`durst-proto`, flake on current nixpkgs (Rust 1.98) with the harness tools.
-`winit-core`/`winit-common` are pinned to `0.31.0-beta.2` in `Cargo.lock`:
-`iced_exdevtools` 0.19.1 doesn't build against beta.3 (R2). R1 is resolved,
-see the risk table. CI runs fmt, clippy, tests and the visual scenarios via nix.
-
-- Replace `dbus`, `dbus-tree` and `dbus-codegen` with `zbus`. Delete `build.rs`
-  codegen and the XML file, and keep `build.rs` only for completions.
-- Upgrade `iced` / `iced_layershell` to versions that support daemon
-  mode (`NewLayerShell` / `RemoveWindow` / `MarginChange`). Pin them.
-- Single daemon: the zbus server runs as a Subscription and Notify opens a surface.
-- `serde_yaml` → `toml`, with the config schema skeleton and defaults.
-- Remove the `--force-output` option; replace `println!` with `log`.
-- Create the `durst-proto` crate.
-- Add `scripts/notify-test.sh` (a battery of `notify-send` / `gdbus` calls).
-- **Done when:** `notify-send a b` shows a popup, it closes on click, and
-  `NotificationClosed` is emitted.
-
-### M1 – Notification parity (daily driver) ✅ done 2026-10-02
-
-Outcome: everything below except `output = "all"` (moved to M4, it needs a
-Wayland connection of our own to enumerate outputs). Surfaces are reconciled
-with the store after every event (`App::sync`), timers only run while a
-notification is visible and not hovered, duplicates and stack tags supersede
-the old entry (closed with reason 4). Icon lookup moved from the unmaintained
-`linicon` (no hicolor fallback when the GTK theme is missing) to
-`freedesktop-icons`; raster icons are pre-scaled because of R7. Twelve visual
-scenarios cover the features. The "+N more" indicator is its own surface.
-
-- Full spec (4.1), per-urgency timeouts, hover pause, `replaces_id`.
-- Stack layout with reflow, `max_visible`, anchors, output selection.
-- Icons and images, markup, progress bar, action buttons, duplicate counter,
-  stack tags.
-- Mouse bindings (4.3), styles per urgency.
-- **Done when:** it replaces dunst on the maintainer's machine for a week
-  without regressions.
-
-### M2 – CLI & control interface ✅ done 2026-10-02
-
-Outcome: as planned. Control commands travel through the UI loop and are
-answered over a oneshot channel; the counts are a shared snapshot published
-with `PropertiesChanged`. Reload re-renders everything and reopens all
-surfaces (anchor and output can only be set at creation). Found and fixed
-R8 on the way. Man pages and completions for both binaries are generated
-into `*/scripts/` (git-ignored).
-- The Durst1 interface (4.11) and the `notif`, `history`, `reload` and `info`
-  commands in durstctl.
-- History ring (4.6).
-- Completions and man page.
-
-### M3 – Rules & modes ✅ done 2026-10-02
-
-Outcome: as planned, with these decisions: content actions are prefixed
-`set_` (`set_summary`, `set_urgency`, …; the plan's `icon`/`category` would
-collide with the matchers of the same name) and `format` became
-`set_summary`/`set_body` templates; each rule sees the notification as the
-earlier rules left it. Sound playback spawns a configurable command
-(`[sound] command`, default `pw-play`) instead of linking `rodio`: no audio
-stack in the daemon, and any player works. The history keeps processed
-notifications (a `hide_body` rule also hides it there); `history pop` shows
-them without running the rules again. Not done: per-rule `anchor`/`output`
-(they would need one stack per anchor; left for later if needed).
-- Matchers and all rule actions (4.5), modes and defer (4.4), the `mode` CLI.
-- Scripts with env vars, sound playback (sound theme lookup + `rodio` or
-  `pw-play`; decided in this milestone).
-- `default_action` / `auto_invoke`.
-
-### M4 – Environment awareness ✅ done 2026-10-02
-
-Outcome: as planned. durst has a second Wayland connection on its own thread
-(`wayland.rs`) for ext-idle-notify-v1, wlr-foreign-toplevel-management and
-output names (wl_output v4); the idle threshold change restarts it. Idle or
-locked pauses all timers; the fullscreen policy reuses the "held" state of
-M3 (`delay` holds arrivals until fullscreen ends, `pushback` also hides shown
-ones). Lock state: logind's `session/auto` resolves to the real session path
-first, because `PropertiesChanged` is only sent under that path. Tests use a
-fake logind (`tools/fake-logind`) and a real fullscreen foot window; the
-harness supports several headless outputs (`# outputs: N`).
-- Idle pause, fullscreen policy, lock detection (4.7).
-- `output = "all"`: enumerate outputs on our own Wayland connection.
-
-### M5 – Operations ✅ done 2026-10-02
-
-Outcome: the config directory is watched (editors and home-manager replace
-the file, which would end a watch on the file itself); unchanged content is
-skipped. A broken config keeps the previous one, or the defaults at startup
-instead of exiting (under systemd that would be a restart loop), and is
-reported in a critical notification of durst's own (id `u32::MAX`) that
-closes once the config is valid. `contrib/` has the systemd user unit and
-the D-Bus activation files for both bus names; the `activation` scenario
-starts durst through them. The flake has `packages.default` (binaries
-wrapped with their runtime libraries, man pages, completions, unit, service
-files, example config). The dev profile builds with line tables only: full
-debug info made each debug binary ~450 MB and filled the disk.
-- Config hot reload (file watch plus `durstctl reload`), error notification on
-  a bad config.
-- `contrib/durst.service` (`Type=dbus`, `BusName=org.freedesktop.Notifications`,
-  `PartOf=graphical-session.target`) and the D-Bus activation file.
-- Flake package output, a CI matrix (fmt, clippy, test) and a README rewrite
-  with the config reference.
-
-### M6 – Volume OSD ✅ done 2026-10-02
-
-Outcome: native PipeWire (`pipewire-rs` 0.10, own thread and main loop).
-Setting a volume follows WirePlumber's mixer: nodes of a sound card get the
-change on the device's active `Route` (saved there), other nodes on their
-`Props` (R5: no trait/wpctl fallback was needed). Percent is the cubic scale
-of pavucontrol/wpctl; read-only checks on real hardware matched `wpctl
-get-volume` and found the device routes. Writing through a hardware route is
-not tested yet (the sandbox's null sink has no device). Slider updates are
-throttled to one per 30 ms (R6). The mute button has a fixed width so the
-slider doesn't jump when its label changes (found by the drag test). Tests
-run a private PipeWire (`scripts/visual/pipewire.conf`) and read the result
-back with `pw-dump`. Node info updates only carry what changed: applying
-them unconditionally lost the node's name after every volume change.
-- PipeWire backend (4.8), volume OSD UI, `durstctl volume`, `osd show volume|mic`.
-
-### M7 – Media OSD ✅ done 2026-10-02
-
-Outcome: MPRIS client on its own session bus connection (`mpris.rs`):
-players are found at startup and through `NameOwnerChanged`, their
-`PlaybackStatus` and `Metadata` followed with abortable streams. The active
-player is a pure rule in `core/media.rs`. The OSD shows on a change of the
-active song, not when a player repeats its metadata (e.g. once more with the
-cover) and not for the players found at startup. Covers: `file://` and
-`http(s)://` (ureq with rustls, 5 s timeout, 10 MB limit), loaded off the
-UI loop and scaled once; the cover square, and the buttons (one width for
-all labels) keep their size, so nothing moves. Not done: player selection
-(not chosen in the planning) and seeking.
-- MPRIS watcher and active-player logic (4.9), media OSD UI, `durstctl media`.
-
-### M8 – Polish
-- Performance (icon cache, idle CPU ≈ 0: no tick subscription when nothing
-  is timing out), fuzzing the markup parser, and accessibility (font scaling).
-
-## 6. Testing strategy
-
-- **Unit:** `core` is fully deterministic with injected `Instant`s. This covers
-  timeouts, pause/resume, rule matching, stacking, defer/modes, history and
-  layout math.
-- **Markup:** table-driven tests plus a `cargo fuzz` target.
-- **Integration:** start a private bus (`dbus-daemon --session --print-address`)
-  and run the daemon's zbus service headless (without UI), using the `core`
-  effects as observable output. A zbus client sends `Notify` and asserts the
-  replies and signals.
-- **Config:** parse the shipped example config in a test, and check that
-  unknown-key errors include line and column.
-- **Visual (closed loop):** `scripts/visual/run.sh <scenario>` runs durst in an
-  isolated headless sway (`WLR_BACKENDS=headless`, pixman renderer) with a
-  private D-Bus session, executes the scenario's `notify-send`/`gdbus` calls,
-  captures the output with `grim` and prints every box's geometry as JSON
-  (`scripts/visual/measure.py`), including the padding around the content.
-  Mouse input comes from `tools/vpointer` (wlr-virtual-pointer inside the
-  sandbox). Scenarios assert with `verify`/`check` and the emitted signals;
-  `run-all.sh` runs everything. iced renders with tiny-skia, so pixels are
-  deterministic. This lets layout changes be checked automatically against
-  expected positions, heights and gaps, and the PNG can be inspected. Scenarios
-  live in `scripts/visual/scenarios/`. Later: golden-image comparison in CI.
-- **Manual:** `scripts/notify-test.sh` on sway, Hyprland and niri.
-
-## 7. Risks & open questions
-
-| # | Risk | Mitigation |
+| | Milestone | Status |
 |---|---|---|
-| R1 | With one surface per notification, durst must know each surface's height before positioning the ones below. | **Resolved in M0.** `ui::notification::height` lays out the text with iced's `Paragraph` (same global font system, fonts, shaping and wrapping as the view). `scenarios/stack.sh` verifies it: four notifications of different heights, gaps exactly `general.gap`, and the top and bottom padding around the rendered content within 1–4 px of each other, so nothing is clipped or oversized. Every new UI element (icons, progress, actions) must extend both `height` and `view`, plus a scenario. |
-| R2 | iced_layershell API churn between versions | Pin the versions and keep all layer-shell calls in `app.rs`. Already happened once: the winit-core beta pin (M0). |
-| R3 | Not every compositor implements `wlr-foreign-toplevel-management` (e.g. GNOME). | Optional feature with a graceful fallback. GNOME/KDE aren't targets anyway, since they run their own notification servers. |
-| R4 | `focused` output depends on the compositor, which places output-less layer surfaces where it likes. | Resolved: iced_layershell's `LastOutput` turned out to mean "the output of durst's own last clicked surface, else the first output", so a newly connected main monitor was never used. durst now takes the focused window's output from wlr-foreign-toplevel (`output_enter`), pins the stack there until it is empty, and leaves it to the compositor only without a focused window. `scenarios/focus-output.sh` covers focus changes and a hotplugged monitor. |
-| R5 | PipeWire API complexity (default node tracking, channel volumes). | Resolved in M6: `audio.rs` follows the `default` metadata, node `Props` and device `Route`s natively; no fallback needed. |
-| R6 | The interactive slider floods PipeWire with updates. | Resolved in M6: at most one update per 30 ms, the last value on release. |
-| R8 | iced_layershell silently drops changes (margin, size, removal) for surfaces it hasn't created yet. Quick bursts of notifications reorder the stack before the new surfaces exist: a surface stays at its old place, hidden under another (`urgency` failed 2 of 15 runs). | Surfaces count as `opened` only after the window `Opened` event; until then `sync` sends no changes (and diffs again afterwards), and removals are deferred. 30/30 runs pass. `REPEAT=N scripts/visual/run-all.sh` catches such flakiness. |
-| R7 | iced_tiny_skia 0.14 misplaces scaled raster images: it truncates the position in image space, so an upscaled image moves by up to the scale factor (found by `scenarios/content.sh`). | durst scales raster icons to their display size itself (`ui::icons::scaled`). HiDPI output scaling can still shift by up to the scale factor; report upstream. |
+| M0 | Foundation: zbus, single daemon, TOML, iced 0.14 | ✅ 2026-10-01 |
+| M1 | Notification parity with dunst | ✅ 2026-10-02 (daily-driver test running) |
+| M2 | `durstctl`, control interface, history | ✅ 2026-10-02 |
+| M3 | Rules & modes | ✅ 2026-10-02 |
+| M4 | Idle, lock, fullscreen, `output = "all"` | ✅ 2026-10-02 |
+| M5 | Hot reload, systemd, D-Bus activation, package | ✅ 2026-10-02 |
+| M6 | Volume OSD (PipeWire) | ✅ 2026-10-02 |
+| M7 | Media OSD (MPRIS) | ✅ 2026-10-02 |
+| — | Fixes from daily use: endless config reloads; focused output didn't follow a newly connected monitor | ✅ 2026-10-03 |
+| M8 | Polish and the missing parts (section 8) | open |
 
-Open, to decide during implementation:
-- Whether the "+N more" indicator is its own surface or part of the last
-  visible notification.
-- Animations (deliberately out of scope for now).
+Notes on deviations, per milestone:
 
-## 8. Corrections to the README (applied)
+- **M0:** `winit-core`/`winit-common` pinned to `0.31.0-beta.2`
+  (`iced_exdevtools` 0.19.1 doesn't build against beta.3); iced_layershell
+  without default features (its theme detection blocks startup).
+- **M1:** icon lookup switched from the unmaintained `linicon` (no hicolor
+  fallback) to `freedesktop-icons`; raster icons pre-scaled (R7).
+- **M2:** fixed R8 (changes to surfaces not created yet were dropped).
+- **M3:** rewrite actions are named `set_*` (the plan's `icon`/`category`
+  collided with the matchers); `format` became `set_summary`/`set_body`;
+  sound via a player command instead of `rodio`; per-rule anchor/output not
+  done.
+- **M4:** lock state from logind's real session path (signals aren't sent
+  for `session/auto`).
+- **M5:** dev profile with line tables only (debug builds were ~450 MB each
+  and filled the disk).
+- **M6:** a node info update only carries what changed; applying it blindly
+  lost the node's name after every volume change. The mute button has a
+  fixed width so the slider doesn't jump.
+- **M7:** the OSD ignores repeated metadata (e.g. the cover arriving later)
+  and players found at startup.
+- **Daily use (2026-10-03):** inotify also reports reads, so every reload
+  triggered the next one; `LastOutput` turned out to be "durst's last
+  clicked surface, else the first output", replaced by the focused window's
+  output (R4).
 
-- `ext-foreign-toplevel-list-v1` doesn't expose fullscreen or activated state,
-  so `wlr-foreign-toplevel-management-unstable-v1` is used instead.
-- `ext-session-lock-v1` is only for the lock client itself, so lock state comes
-  from logind `LockedHint` instead.
-- The ToDo "replace dbus with zbus?" is decided: yes (M0).
+## 6. Testing
+
+- **Unit (54 tests):** core logic with injected time (timers, sorting,
+  duplicates, stack tags, held entries, history, rules, modes, media players,
+  layout), config parsing and errors, markup, hint and metadata parsing, pod
+  encoding, sound and cover helpers.
+- **Visual (34 scenarios):** `scripts/visual/run.sh` runs durst in an
+  isolated headless sway with a private D-Bus session, a fake logind, a
+  private PipeWire with a null sink and source, and fake MPRIS players; mouse
+  input via a virtual pointer. Scenarios send notifications, click, drag,
+  scroll, change volumes, switch focus and outputs, and verify with
+  screenshot measurements (box geometry, padding, pixel colors), D-Bus
+  signals, `durstctl`, `pw-dump` and the players' call logs.
+  `scripts/visual/run-all.sh` runs all; `REPEAT=N` catches races.
+- **CI:** `.github/workflows/rust.yml` runs fmt, clippy, tests, all visual
+  scenarios and the package build via nix (never run on GitHub yet).
+- **Manual:** `scripts/notify-test.sh`; daily use on sway.
+
+## 7. Risks
+
+| # | Risk | Status |
+|---|---|---|
+| R1 | Surface heights must be known before positioning | Resolved: predicted with iced's `Paragraph`; every view element exists in `view` and `height`, checked by padding measurements |
+| R2 | iced_layershell API churn | Versions pinned; happened once (winit-core beta) |
+| R3 | Compositors without wlr-foreign-toplevel (e.g. GNOME) | Fullscreen and focused output degrade gracefully (compositor decides); GNOME/KDE run their own daemons anyway |
+| R4 | Choosing the focused output | Resolved 2026-10-03 (see M-notes) |
+| R5 | PipeWire complexity | Resolved in M6; hardware route writes untested (section 8) |
+| R6 | Slider floods PipeWire | Resolved: one update per 30 ms |
+| R7 | iced_tiny_skia misplaces scaled raster images | Worked around by pre-scaling; with HiDPI output scaling it can still shift, not reported upstream yet |
+| R8 | iced_layershell drops changes for surfaces not created yet | Resolved: changes wait for the `Opened` event |
+| R9 | A running daemon and a newer `durstctl` disagree on the interface (seen: "Signature mismatch" from `durstctl info`) | Open: durstctl should explain it ("restart durst") |
+
+## 8. Missing parts
+
+### Not verified on real systems
+
+1. **Volume through a hardware route.** Reading matched `wpctl` on real
+   hardware; *writing* through a device route is only tested on the
+   sandbox's null sink (node props path). Needs one check on a real sound
+   card.
+2. **Real media players** (Spotify, Firefox, mpv): only the fake player is
+   tested.
+3. **Other compositors** (Hyprland, niri, river): only sway is tested.
+4. **HiDPI** output scaling (layout and R7).
+5. **CI on GitHub** has never run; the package build fails on the configured
+   remote Nix builder (likely its disk), it was built locally.
+
+### Planned but not built
+
+6. **`font` option:** the style has `font_size` only; the font family is
+   the system's sans-serif.
+7. **Long bodies:** no `max_lines`/ellipsis; a very long body makes a
+   notification taller than the screen.
+8. **Many actions:** all buttons share one row and get narrower; labels are
+   clipped.
+9. **Icon size range** (min/max instead of one fixed `icon_size`) and
+   `icon_position = "top"`.
+10. **App name** is not shown in notifications (only used by rules).
+11. **Volume OSD icon** reflecting level and mute.
+12. **Per-rule `anchor`/`output`** (needs one stack per anchor).
+13. **`history_pop` mouse action.**
+14. **`ActivationToken` signal** (xdg-activation, so actions can focus the
+    app) and the `hlcolor` hint.
+15. **Reconnecting:** if PipeWire restarts, volume control stays gone until
+    durst restarts; same for a lost MPRIS/logind connection.
+16. **Size limit for `image-data`** hints (covers have 10 MB, image hints
+    none).
+17. **Markup fuzzing** (`cargo fuzz` target).
+18. **R9:** a clear message for a durstctl/daemon version mismatch.
+
+### Decided against in the planning (could be revisited)
+
+- Player selection and seeking in the media OSD; per-application volume and
+  output device switching; persistent history; a status-bar subscribe
+  stream; dunstctl-compatible commands; home-manager module; animations.
+
+### Housekeeping
+
+- Merge `iced-layers` into `master` (13 commits, PR not created yet).
+- Daily-driver test of M1's "done when": replace mako/dunst for a week.
+
+## 9. Next steps (suggested order)
+
+1. Finish the daily-driver test, fix what comes up (each fix with a
+   scenario).
+2. Verify items 1–2 on the real system (with explicit consent for the
+   volume change).
+3. Items 7, 15, 18 (robustness), then 6, 10, 11 (looks).
+4. PR to `master`, run CI on GitHub.
