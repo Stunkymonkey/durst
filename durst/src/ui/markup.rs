@@ -114,11 +114,13 @@ struct Tag {
 
 /// Parses `<name attrs>`, `</name>` or `<name/>` at the start of `s`.
 fn tag(s: &str) -> Option<Tag> {
-    let end = s.find('>')?;
-    let inner = &s[1..end];
-    if inner.contains('<') {
+    // up to the next `<` only: searching each `<` for a `>` to the end
+    // would make a body of many `<` quadratic
+    let end = 1 + s[1..].find(['<', '>'])?;
+    if s[end..].starts_with('<') {
         return None;
     }
+    let inner = &s[1..end];
     let (closing, inner) = match inner.strip_prefix('/') {
         Some(inner) => (true, inner),
         None => (false, inner),
@@ -163,7 +165,8 @@ fn attribute(attrs: &str, name: &str) -> Option<String> {
 
 /// Decodes `&name;`, `&#NN;` or `&#xHH;` at the start of `s`.
 fn entity(s: &str) -> Option<(char, usize)> {
-    let end = s[..s.len().min(12)].find(';')?;
+    // bytes: the 12th may be inside a multi-byte character
+    let end = s.bytes().take(12).position(|b| b == b';')?;
     let name = &s[1..end];
     let c = match name {
         "amp" => '&',
@@ -187,6 +190,25 @@ fn entity(s: &str) -> Option<(char, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn text(runs: &[Run]) -> String {
+        runs.iter().map(|r| r.text.as_str()).collect()
+    }
+
+    #[test]
+    fn entity_lookahead_inside_a_multibyte_character() {
+        // found by fuzzing: byte 12 is inside the "€"
+        assert_eq!(text(&parse("&abcdefghij€;")), "&abcdefghij€;");
+        assert_eq!(text(&parse("&#x20AC;€")), "€€");
+    }
+
+    #[test]
+    fn many_unclosed_brackets_are_linear() {
+        let input = "<".repeat(200_000);
+        let start = std::time::Instant::now();
+        assert_eq!(text(&parse(&input)), input);
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
+    }
 
     fn run(text: &str) -> Run {
         Run {
