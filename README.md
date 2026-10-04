@@ -188,6 +188,22 @@ software renderer (`ICED_BACKEND=tiny-skia`), so pixels are deterministic.
 `REPEAT=N scripts/visual/run-all.sh` runs every scenario N times, to catch
 races.
 
+### other compositors
+
+The visual tests run on sway only. `nix/vm-test.nix` checks the basics on
+other compositors, each in a NixOS VM (needs KVM; no GPU, so software
+rendering): durst starts from its packaged systemd unit, output names, a
+notification's position and a rule's own stack (measured on a screenshot),
+a click through QEMU's tablet, fullscreen and idle detection.
+
+```sh
+nix build .#checks.x86_64-linux.vm-hyprland -L   # also: vm-sway, vm-labwc, vm-niri
+nix flake check -L                               # all of them
+```
+
+The screenshots end up in `result/`. niri refuses software rendering on a
+tty, so it runs nested in sway, full screen; durst only talks to niri.
+
 ### fuzzing
 
 Notification bodies come from any app, so the markup parser is fuzzed

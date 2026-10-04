@@ -344,6 +344,11 @@ Notes on deviations, per milestone:
   README); found a panic (entity lookahead cut a multi-byte character) and
   a quadratic case (many `<` without `>`), both fixed with unit tests;
   4.1 M inputs in 5 min clean afterwards (2026-10-04).
+- **Other compositors (2026-10-04):** `nix/vm-test.nix` runs the basics
+  (packaged systemd unit, output names, position and per-rule stack by
+  screenshot, click via QEMU's tablet, fullscreen and idle detection) in a
+  NixOS VM per compositor, as flake checks: sway, labwc, Hyprland and niri
+  (nested in sway: it refuses software rendering on a tty) all pass.
 - **Package:** `nix build` works locally, in CI and on the remote builder
   (`--max-jobs 0`, 2026-10-04; an earlier failure there is gone).
 - **CI:** `.github/workflows/rust.yml` runs fmt, clippy, tests, all visual
@@ -369,7 +374,8 @@ Notes on deviations, per milestone:
 
 ### Not verified on real systems
 
-3. **Other compositors** (Hyprland, niri, river): only sway is tested.
+3. **Other compositors:** KDE Plasma (kwin, which lacks foreign-toplevel),
+   river and a real GPU are untested; the ones in VMs pass (6. Testing).
 4. **HiDPI** output scaling (layout and R7).
 
 ### Planned but not built
