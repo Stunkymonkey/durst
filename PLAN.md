@@ -239,7 +239,13 @@ MPRIS players from startup and `NameOwnerChanged`; the active player is the
 one that most recently started playing, else the last active. OSD: cover
 (`file://` or `http(s)://`, cached, placeholder while loading), title,
 artist, previous / play-pause / next (one width); shown on a change of the
-active song and on `durstctl media`.
+active song and on `durstctl media`. playerctld, a proxy mirroring the
+most recent player, is ignored.
+
+Verified with real players (2026-10-04): Rhythmbox (status, title,
+play/pause/toggle/next/prev through `durstctl media`, matching the
+player's own `PlaybackStatus`); Firefox and mpv work in daily use
+(reported by the user). Spotify is untested.
 
 ### 4.10 CLI – `durstctl`
 
@@ -361,10 +367,6 @@ Notes on deviations, per milestone:
 
 ### Not verified on real systems
 
-2. **Real media players:** Rhythmbox verified (2026-10-04: status, title,
-   play/pause/toggle/next/prev through `durstctl media`, matching the
-   player's own `PlaybackStatus`). Not yet: Firefox, Spotify (not
-   installed), mpv (needs the mpv-mpris plugin).
 3. **Other compositors** (Hyprland, niri, river): only sway is tested.
 4. **HiDPI** output scaling (layout and R7).
 5. **Remote Nix builder:** the package build fails on the configured remote
@@ -395,5 +397,4 @@ Notes on deviations, per milestone:
 
 1. Finish the daily-driver test, fix what comes up (each fix with a
    scenario).
-2. Finish item 2 with Firefox (and mpv with mpv-mpris, if used).
-3. PR to `master` of durst-notification/durst (conflicts in 5 files).
+2. PR to `master` of durst-notification/durst (conflicts in 5 files).
