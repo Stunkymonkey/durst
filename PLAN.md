@@ -347,8 +347,13 @@ Notes on deviations, per milestone:
 - **Other compositors (2026-10-04):** `nix/vm-test.nix` runs the basics
   (packaged systemd unit, output names, position and per-rule stack by
   screenshot, click via QEMU's tablet, fullscreen and idle detection) in a
-  NixOS VM per compositor, as flake checks: sway, labwc, Hyprland and niri
-  (nested in sway: it refuses software rendering on a tty) all pass.
+  NixOS VM per compositor, as flake checks: sway, labwc, Hyprland, niri
+  (nested in sway: it refuses software rendering on a tty), KWin (alone,
+  without plasmashell, which is a notification daemon itself; screenshots
+  from QEMU; no fullscreen detection: KWin lacks wlr-foreign-toplevel) and
+  river-classic all pass. river 0.4 shows nothing without a separate window
+  manager, none of which is in nixpkgs yet. The VMs render in software; a
+  real GPU (wgpu) is covered by daily use on sway.
   HiDPI: sway at 2 and 1.5, Hyprland at 2; every size and position scales
   exactly (an image icon's too, R7), text is rendered at the output's scale
   (at 2: 39 % of the text's 2×2 blocks uniform, 100 % if a 1x image were
@@ -378,8 +383,8 @@ Notes on deviations, per milestone:
 
 ### Not verified on real systems
 
-3. **Other compositors:** KDE Plasma (kwin, which lacks foreign-toplevel),
-   river and a real GPU are untested; the ones in VMs pass (6. Testing).
+Nothing open: compositors and HiDPI run in VM tests (6. Testing). river
+0.4 can be added once a window manager for it is in nixpkgs.
 
 ### Planned but not built
 
