@@ -30,7 +30,19 @@
         packages.default = rustPlatform.buildRustPackage {
           pname = "durst";
           version = (lib.importTOML ./durst/Cargo.toml).package.version;
-          src = lib.cleanSource ./.;
+          # only what the build reads: editing tests or docs doesn't rebuild
+          src = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./Cargo.toml
+              ./Cargo.lock
+              ./durst
+              ./durst-proto
+              ./durstctl
+              ./tools
+              ./contrib
+            ];
+          };
           cargoLock.lockFile = ./Cargo.lock;
 
           # the test tools in tools/ are not installed
@@ -86,6 +98,29 @@
             platforms = lib.platforms.linux;
           };
         };
+
+        # durst on other compositors, each in a NixOS VM (needs KVM):
+        # nix build .#checks.x86_64-linux.vm-hyprland -L
+        checks = lib.optionalAttrs stdenv.hostPlatform.isLinux (
+          lib.listToAttrs (
+            map
+              (
+                compositor:
+                lib.nameValuePair "vm-${compositor}" (
+                  import ./nix/vm-test.nix {
+                    inherit pkgs lib compositor;
+                    durst = packages.default;
+                  }
+                )
+              )
+              [
+                "sway"
+                "labwc"
+                "hyprland"
+                "niri"
+              ]
+          )
+        );
 
         devShell = mkShell rec {
           nativeBuildInputs = [
