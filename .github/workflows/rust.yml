@@ -3,53 +3,23 @@ name: CI
 on: [push, pull_request]
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        os:
-          - ubuntu-16.04
-          - ubuntu-18.04
-        rust:
-          - stable
-          - beta
-          - nightly
-    runs-on: ${{ matrix.os }}
+  check:
+    runs-on: ubuntu-latest
     steps:
-    - name: checkout
-      uses: actions/checkout@v2
-
-    - name: environment
-      run: sudo apt-get install libdbus-1-dev
-
-    - name: toolchain
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: minimal
-        toolchain: ${{ matrix.rust }}
-        override: true
-        components: rustfmt, clippy
-
-    - name: build
-      uses: actions-rs/cargo@v1
-      with:
-        command: build
-
-    - name: test
-      uses: actions-rs/cargo@v1
-      with:
-        command: test
-
-    # should be removed in the future, when generated code can be ignored
-    - name: toolchain
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: minimal
-        toolchain: nightly
-        override: true
-        components: rustfmt, clippy
-
-    - name: format
-      uses: actions-rs/cargo@v1
-      with:
-        command: fmt
-        args: --all -- --check
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: format
+        run: nix develop -c cargo fmt --all -- --check
+      - name: clippy
+        run: nix develop -c cargo clippy --all-targets -- -D warnings
+      - name: test
+        run: nix develop -c cargo test
+      - name: visual
+        run: nix develop -c scripts/visual/run-all.sh
+      - name: package
+        run: nix build -L
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: visual
+          path: target/visual/

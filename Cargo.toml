@@ -1,6 +1,20 @@
 [workspace]
 resolver = "2"
+exclude = ["fuzz"]
 members = [
     "durst",
+    "durst-proto",
     "durstctl",
+    "tools/fake-logind",
+    "tools/fake-player",
+    "tools/fake-window",
+    "tools/vpointer",
 ]
+
+# full debug info made every debug build of durst ~450 MB; backtraces still
+# get file and line
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

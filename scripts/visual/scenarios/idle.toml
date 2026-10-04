@@ -1,0 +1,2 @@
+[general]
+idle_threshold = "1s"

@@ -2,10 +2,10 @@
 name = "durst"
 version = "0.1.0"
 authors = ["Felix Buehler <account@buehler.rocks>"]
-edition = "2021"
+edition = "2024"
 repository = "https://github.com/durst-notification/durst"
 homepage = "https://durst-notification.org"
-description = "dunst written in Rust"
+description = "Wayland notification daemon inspired by dunst"
 include = [
     "**/*.rs",
     "Cargo.toml",
@@ -13,27 +13,42 @@ include = [
 readme = "README.md"
 
 [dependencies]
+durst-proto = { path = "../durst-proto" }
 clap = "4.5"
-dbus = "0.9"
-dbus-tree = "0.9"
 env_logger = "0.11"
-log = "0.4"
-serde = { version = "1.0", features = ["derive"] }
-serde_yaml = "0.9"
-iced = { version = "0.13", features = [
-	"default",
+futures = "0.3"
+notify = { version = "8", default-features = false }
+pipewire = "0.10"
+regex = "1"
+iced = { version = "=0.14.0", default-features = false, features = [
 	"advanced",
+	"tiny-skia",
+	"wgpu",
 	"image",
 	"svg",
-	"multi-window",
-	"debug",
+	"tokio",
+	"wayland",
 ] }
-iced_core = "0.13"
-iced_runtime = "0.13"
-iced_layershell = "0.9"
-linicon = "2.3"
+# same version as iced; raster icons are scaled by durst, see ui/icons.rs
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
+# linux-theme-detection blocks startup on a portal call; colors come from the config
+iced_layershell = { version = "=0.19.1", default-features = false }
+freedesktop-icons = "0.4"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1", features = ["sync", "time", "macros"] }
+toml = "1"
+# cover art of media players; pure Rust TLS
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [build-dependencies]
 clap = "4.5"
-clap_complete = "4.0"
-dbus-codegen = "0.12"
+clap_complete = "4.5"
+clap_mangen = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "test-util"] }

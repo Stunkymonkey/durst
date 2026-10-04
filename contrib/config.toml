@@ -1,0 +1,161 @@
+# durst example configuration
+# copy to ~/.config/durst/config.toml; every key is optional
+
+[general]
+# top-left | top | top-right | bottom-left | bottom | bottom-right
+anchor = "top-right"
+# distance from the anchored screen edges: [x, y]
+offset = [20, 20]
+# space between two notifications
+gap = 8
+width = 380
+# notifications shown at once (0 = unlimited); the rest wait, "+N more" shows how many
+max_visible = 5
+# critical before normal before low, then by arrival
+sort_by_urgency = true
+# newest notification next to the anchored edge
+newest_first = false
+# merge identical notifications into one with a counter
+stack_duplicates = true
+# "focused": the output of the focused window when the first notification
+# appears; the stack stays there until it is empty. Or "all", or "name:<output>"
+output = "focused"
+# command to open links, the URL is appended
+browser = ["xdg-open"]
+# icon theme for icon names; default: gtk-icon-theme-name from GTK's settings.ini
+# icon_theme = "Adwaita"
+# use the urgency's timeout even if the sender asks for another one
+ignore_dbus_timeout = false
+# timeouts pause after this long without input (and while the session is locked); 0 = never
+idle_threshold = "2m"
+
+[history]
+# how many closed notifications are kept for `durstctl history`, 0 = none
+length = 20
+# notifications shown again by `durstctl history pop` don't expire
+sticky = true
+
+# per button: a list of none | close_current | close_all | do_action | open_url
+# | history_pop
+# do_action invokes the "default" action, or the only action if there is one
+[mouse]
+left = ["close_current"]
+middle = ["do_action", "close_current"]
+right = ["close_all"]
+scroll_up = []
+scroll_down = []
+
+[style]
+# font family, e.g. "Fira Sans"; default: the system's sans-serif
+# font = "Fira Sans"
+font_size = 14
+# body lines shown at most, the rest is cut off with "…"; 0 = all
+max_lines = 10
+# the app name, small, above the summary
+show_app_name = false
+padding = 12
+spacing = 8
+# SVG icons are drawn at icon_size; raster images keep their own size within
+# min_icon_size..=max_icon_size (both default to icon_size: always icon_size)
+icon_size = 48
+# min_icon_size = 32
+# max_icon_size = 64
+background = "#1e1e2ee6"
+foreground = "#cdd6f4"
+link = "#89b4fa"
+border = { width = 2, color = "#89b4fa", radius = 10 }
+progress = { height = 6, color = "#89b4fa", background = "#45475a" }
+action = { padding = 6, background = "#313244", foreground = "#cdd6f4", radius = 6 }
+
+# timeout: "500ms", "5s", "2m" or seconds; 0 = never expire
+# style: overrides for [style]; critical has a built-in red border
+[urgency.low]
+timeout = "5s"
+style = { foreground = "#a6adc8" }
+
+[urgency.normal]
+timeout = "10s"
+
+[urgency.critical]
+timeout = 0
+style = { border.color = "#f38ba8" }
+
+[sound]
+# plays a sound file, the path is appended
+command = ["pw-play"]
+# sound theme for sound names (freedesktop sound theme spec)
+theme = "freedesktop"
+# play the sound-file / sound-name hints sent by applications
+play_hints = true
+
+[osd.volume]
+# on-screen display for speaker and microphone volume (normal style)
+enabled = true
+anchor = "bottom"
+offset = [0, 80]
+width = 360
+# hidden after this long, unless the pointer is over it
+timeout = "2s"
+# percent per scroll step and for `durstctl volume up/down`
+step = 5
+# the slider's maximum; above 100 amplifies
+max_volume = 100
+# also show it when another program changes the volume
+show_on_external_change = true
+
+[osd.media]
+# on-screen display for the media player (MPRIS): cover, title, artist, buttons
+enabled = true
+anchor = "top"
+offset = [0, 20]
+width = 420
+cover_size = 72
+timeout = "4s"
+# show it when the playing track changes
+show_on_track_change = true
+
+# Rules are applied in order to every notification; each sees the result of
+# the earlier ones. All matchers given must match; text matchers are regexes
+# searched anywhere (anchor them with ^...$).
+#
+# matchers: app_name summary body icon category desktop_entry stack_tag
+#           (each also as not_<name>), urgency, not_urgency, transient,
+#           has_actions, mode, not_mode, fullscreen_active
+# content:  set_summary set_body (templates with {app_name} {summary} {body}
+#           {category} {urgency}), hide_body, set_urgency, set_category,
+#           set_stack_tag, set_icon, set_transient
+# display:  style (like [style]), default_icon, icon_position (left|right|top|off),
+#           timeout, anchor and output (like [general]: a stack of its own,
+#           e.g. critical ones at the bottom; max_visible counts all stacks)
+# routing:  skip_display (history only), history_ignore, defer (hold back),
+#           fullscreen = show | delay (hold back the ones arriving during
+#           fullscreen) | pushback (hide all while a window is fullscreen)
+# actions:  default_action (for do_action), auto_invoke
+# effects:  script (command list, DURST_* env vars) with script_on
+#           (receive|action|close), sound (file or theme name), mute_sound
+#
+# Modes are switched with `durstctl mode enable|disable|toggle <name>`.
+
+# do not disturb: hold everything but critical notifications back
+[[rule]]
+name = "dnd"
+mode = "dnd"
+not_urgency = "critical"
+defer = true
+
+# keep games and videos undisturbed, except for critical notifications
+# [[rule]]
+# not_urgency = "critical"
+# fullscreen = "delay"
+
+# no message contents on screen
+# [[rule]]
+# app_name = "^(Signal|Element)$"
+# hide_body = true
+# sound = "message-new-instant"
+
+# keep the volume slider notifications of scripts out of the history
+# [[rule]]
+# stack_tag = "^volume$"
+# history_ignore = true
+# timeout = "1s"
