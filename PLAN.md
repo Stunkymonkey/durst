@@ -344,6 +344,8 @@ Notes on deviations, per milestone:
   README); found a panic (entity lookahead cut a multi-byte character) and
   a quadratic case (many `<` without `>`), both fixed with unit tests;
   4.1 M inputs in 5 min clean afterwards (2026-10-04).
+- **Package:** `nix build` works locally, in CI and on the remote builder
+  (`--max-jobs 0`, 2026-10-04; an earlier failure there is gone).
 - **CI:** `.github/workflows/rust.yml` runs fmt, clippy, tests, all visual
   scenarios and the package build via nix; passes on GitHub (PR #1 in the
   fork).
@@ -369,8 +371,6 @@ Notes on deviations, per milestone:
 
 3. **Other compositors** (Hyprland, niri, river): only sway is tested.
 4. **HiDPI** output scaling (layout and R7).
-5. **Remote Nix builder:** the package build fails on the configured remote
-   builder (likely its disk); it builds locally and in CI.
 
 ### Planned but not built
 
