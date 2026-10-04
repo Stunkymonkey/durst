@@ -5,12 +5,14 @@
 #
 #   nix build .#checks.x86_64-linux.vm-<compositor> -L
 #
-# The screenshots end up in the result.
+# The screenshots end up in the result. `scale` (a string, e.g. "1.5") is the
+# output scale, for HiDPI: all sizes are expected multiplied by it.
 {
   pkgs,
   lib,
   durst,
   compositor,
+  scale ? "1",
 }:
 let
   # each: the NixOS settings, the files in alice's home, and the command
@@ -21,6 +23,7 @@ let
       env.WLR_RENDERER = "pixman";
       files.".config/sway/config" = ''
         output * bg #000000 solid_color
+        output * scale ${scale}
         default_border none
       '';
       start = "sway";
@@ -38,7 +41,7 @@ let
       module.programs.hyprland.enable = true;
       env = { };
       files.".config/hypr/hyprland.conf" = ''
-        monitor = , preferred, auto, 1
+        monitor = , preferred, auto, ${scale}
         misc {
           disable_hyprland_logo = true
           disable_splash_rendering = true
@@ -78,6 +81,9 @@ let
         layout {
             background-color "#000000"
         }
+        output "winit" {
+            scale ${scale}
+        }
       '';
       start = "sway";
       # sway's and niri's
@@ -86,6 +92,8 @@ let
     };
   };
   c = compositors.${compositor};
+  # labwc has no output settings in its config
+  scalable = compositor != "labwc";
 
   config = pkgs.writeText "durst.toml" ''
     [general]
@@ -106,8 +114,9 @@ let
     )
   );
 in
+assert lib.assertMsg (scalable || scale == "1") "${compositor}: no scale setting";
 pkgs.testers.runNixOSTest {
-  name = "durst-${compositor}";
+  name = "durst-${compositor}" + lib.optionalString (scale != "1") "-scale${scale}";
 
   nodes.machine = {
     imports = [ c.module ];
@@ -133,6 +142,24 @@ pkgs.testers.runNixOSTest {
       (pkgs.python3.withPackages (ps: [ ps.pillow ]))
     ];
     environment.etc."durst-test/measure.py".source = ../scripts/visual/measure.py;
+    # share of the text's 2x2 blocks (aligned to the box) that are one
+    # color: 1.0 if a 1x image was doubled, clearly less if rendered at 2x
+    environment.etc."durst-test/blocky.py".text = ''
+      import sys
+      from PIL import Image
+
+      im = Image.open(sys.argv[1]).convert("RGB")
+      x0, y0, x1, y1 = map(int, sys.argv[2:6])
+      bg = im.getpixel((x0, y0))
+      uniform = total = 0
+      for y in range(y0, y1 - 1, 2):
+          for x in range(x0, x1 - 1, 2):
+              block = {im.getpixel((x + dx, y + dy)) for dx in (0, 1) for dy in (0, 1)}
+              if block != {bg}:
+                  total += 1
+                  uniform += len(block) == 1
+      print(uniform / max(total, 1))
+    '';
     fonts.packages = [ pkgs.dejavu_fonts ];
 
     hardware.graphics.enable = true;
@@ -163,12 +190,25 @@ pkgs.testers.runNixOSTest {
         return json.loads(user("durstctl info --json"))
 
 
+    SCALE = float("${scale}")
+    # rounding of fractional scales may move an edge by a pixel
+    SLACK = 0 if SCALE.is_integer() else 1
+
+
+    def px(logical):
+        return round(logical * SCALE)
+
+
+    def near(a, b):
+        return abs(a - b) <= SLACK
+
+
     def boxes(name):
-        """notification boxes (380 px wide) on a screenshot, and its size"""
+        """notification boxes (380 logical px wide) on a screenshot, and its size"""
         user(f"grim /tmp/{name}.png")
         machine.copy_from_machine(f"/tmp/{name}.png")
         m = json.loads(machine.succeed(f"python3 /etc/durst-test/measure.py /tmp/{name}.png"))
-        return [b for b in m["boxes"] if b["w"] == 380], m["size"]
+        return [b for b in m["boxes"] if near(b["w"], px(380))], m["size"]
 
 
     def pointer(*events: Any):
@@ -237,7 +277,18 @@ pkgs.testers.runNixOSTest {
             print(f"size {size}, boxes {found}")
             assert len(found) == 1, found
             b = found[0]
-            assert b["x"] + b["w"] == size[0] - 20 and b["y"] == 20, b
+            assert near(b["x"] + b["w"], size[0] - px(20)) and near(b["y"], px(20)), b
+
+        if SCALE >= 2 and SCALE.is_integer():
+            with subtest("rendered at the output's scale, not enlarged"):
+                # the summary, inside border and padding
+                inset = px(14)
+                blocky = float(machine.succeed(
+                    f"python3 /etc/durst-test/blocky.py /tmp/first.png {b['x'] + inset}"
+                    f" {b['y'] + px(4)} {b['x'] + inset + px(80)} {b['y'] + b['h'] - px(4)}"
+                ))
+                print(f"uniform 2x2 blocks: {blocky:.2f}")
+                assert blocky < 0.8, blocky
 
         with subtest("a rule's anchor gets a stack of its own"):
             notify("-a", "low", "Second")
@@ -245,13 +296,33 @@ pkgs.testers.runNixOSTest {
             found, size = boxes("anchor")
             print(f"boxes {found}")
             assert len(found) == 2, found
-            low = [b for b in found if b["x"] == 20]
-            assert low and low[0]["y"] + low[0]["h"] == size[1] - 20, found
+            low = [b for b in found if near(b["x"], px(20))]
+            assert low and near(low[0]["y"] + low[0]["h"], size[1] - px(20)), found
 
         with subtest("a click closes a notification"):
-            b = [b for b in found if b["x"] != 20][0]
+            b = [b for b in found if not near(b["x"], px(20))][0]
             click(b["x"] + b["w"] // 2, b["y"] + b["h"] // 2, size)
             retry(lambda _: first not in shown(), 10)
+
+        with subtest("an image icon sits in place, at the output's scale (R7)"):
+            machine.succeed(
+                "python3 -c \"from PIL import Image;"
+                " Image.new('RGB', (64, 64), (255, 0, 0)).save('/tmp/red.png')\""
+            )
+            notify("-i", "/tmp/red.png", "Icon", "a red square")
+            machine.sleep(2)
+            found, size = boxes("icon")
+            b = [b for b in found if not near(b["x"], px(20))][0]
+            box = machine.succeed(
+                "python3 -c \"from PIL import Image;"
+                " im = Image.open('/tmp/icon.png').convert('RGB');"
+                " m = Image.new('1', im.size); m.putdata([p == (255, 0, 0) for p in im.getdata()]);"
+                " print(*m.getbbox())\""
+            ).split()
+            x0, y0, x1, y1 = map(int, box)
+            print(f"box {b}, red {x0} {y0} {x1 - x0}x{y1 - y0}")
+            assert near(x0, b["x"] + px(14)) and near(y0, b["y"] + px(14)), (x0, y0)
+            assert near(x1 - x0, px(48)) and near(y1 - y0, px(48)), (x1 - x0, y1 - y0)
 
         with subtest("a fullscreen window is detected"):
             user("systemd-run --user --unit=fullscreen foot --fullscreen sleep 600")

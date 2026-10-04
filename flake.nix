@@ -99,25 +99,50 @@
           };
         };
 
-        # durst on other compositors, each in a NixOS VM (needs KVM):
-        # nix build .#checks.x86_64-linux.vm-hyprland -L
+        # durst on other compositors, each in a NixOS VM (needs KVM), also
+        # with HiDPI scales: nix build .#checks.x86_64-linux.vm-hyprland -L
         checks = lib.optionalAttrs stdenv.hostPlatform.isLinux (
           lib.listToAttrs (
             map
               (
-                compositor:
-                lib.nameValuePair "vm-${compositor}" (
-                  import ./nix/vm-test.nix {
-                    inherit pkgs lib compositor;
-                    durst = packages.default;
-                  }
-                )
+                {
+                  compositor,
+                  scale ? "1",
+                }:
+                lib.nameValuePair
+                  (
+                    "vm-${compositor}"
+                    + lib.optionalString (scale != "1") "-scale${lib.replaceStrings [ "." ] [ "_" ] scale}"
+                  )
+                  (
+                    import ./nix/vm-test.nix {
+                      inherit
+                        pkgs
+                        lib
+                        compositor
+                        scale
+                        ;
+                      durst = packages.default;
+                    }
+                  )
               )
               [
-                "sway"
-                "labwc"
-                "hyprland"
-                "niri"
+                { compositor = "sway"; }
+                { compositor = "labwc"; }
+                { compositor = "hyprland"; }
+                { compositor = "niri"; }
+                {
+                  compositor = "sway";
+                  scale = "2";
+                }
+                {
+                  compositor = "sway";
+                  scale = "1.5";
+                }
+                {
+                  compositor = "hyprland";
+                  scale = "2";
+                }
               ]
           )
         );
