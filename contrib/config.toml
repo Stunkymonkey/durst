@@ -125,7 +125,8 @@ show_on_track_change = true
 #           {category} {urgency}), hide_body, set_urgency, set_category,
 #           set_stack_tag, set_icon, set_transient
 # display:  style (like [style]), default_icon, icon_position (left|right|top|off),
-#           timeout
+#           timeout, anchor and output (like [general]: a stack of its own,
+#           e.g. critical ones at the bottom; max_visible counts all stacks)
 # routing:  skip_display (history only), history_ignore, defer (hold back),
 #           fullscreen = show | delay (hold back the ones arriving during
 #           fullscreen) | pushback (hide all while a window is fullscreen)

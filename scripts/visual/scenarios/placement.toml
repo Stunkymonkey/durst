@@ -1,0 +1,7 @@
+[[rule]]
+app_name = "^low$"
+anchor = "bottom-left"
+
+[[rule]]
+app_name = "^two$"
+output = "name:HEADLESS-2"

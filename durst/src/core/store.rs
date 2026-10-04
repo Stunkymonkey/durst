@@ -1,7 +1,6 @@
 use std::cmp::Reverse;
 use std::time::{Duration, Instant};
 
-use super::layout::{Margin, stack_margins};
 use super::notification::Notification;
 use crate::config::General;
 
@@ -236,18 +235,6 @@ impl Store {
         self.entries.iter().filter_map(|e| e.timer.deadline()).min()
     }
 
-    /// Margins of the visible entries, plus one for an extra surface of
-    /// `extra_height` after them (the "+N more" indicator).
-    pub fn margins(&self, general: &General, extra_height: Option<u32>) -> Vec<Margin> {
-        let heights: Vec<u32> = self
-            .visible(general)
-            .iter()
-            .map(|e| e.height)
-            .chain(extra_height)
-            .collect();
-        stack_margins(general, &heights)
-    }
-
     fn position(&self, id: u32) -> Option<usize> {
         self.entries.iter().position(|e| e.notification.id == id)
     }
@@ -420,23 +407,5 @@ mod tests {
         assert_eq!(s.next_deadline(), None);
         s.update_timers(&g, t0 + 26 * SEC, false);
         assert_eq!(s.next_deadline(), Some(t0 + 30 * SEC));
-    }
-
-    #[test]
-    fn margins_with_indicator() {
-        let g = General {
-            max_visible: 2,
-            ..general()
-        };
-        let mut s = Store::default();
-        for (id, h) in [(1, 100), (2, 50), (3, 70)] {
-            s.insert(test_notification(id), h, None, false, &g);
-        }
-        assert_eq!(
-            s.margins(&g, Some(20)),
-            vec![(0, 0, 0, 0), (110, 0, 0, 0), (170, 0, 0, 0)]
-        );
-        s.remove(1);
-        assert_eq!(s.margins(&g, None), vec![(0, 0, 0, 0), (60, 0, 0, 0)]);
     }
 }
