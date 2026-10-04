@@ -354,6 +354,26 @@ pkgs.testers.runNixOSTest {
             assert near(x0, b["x"] + px(14)) and near(y0, b["y"] + px(14)), (x0, y0)
             assert near(x1 - x0, px(48)) and near(y1 - y0, px(48)), (x1 - x0, y1 - y0)
 
+        if SCALE >= 2 and SCALE.is_integer():
+            with subtest("an image icon keeps its detail at the output's scale"):
+                # a 1 px checkerboard: its pure green pixels only survive if
+                # the image is kept at the output's resolution
+                n = px(48)
+                machine.succeed(
+                    "python3 -c \"from PIL import Image;"
+                    f" Image.frombytes('RGB', ({n}, {n}), bytes(v for y in range({n}) for x in range({n})"
+                    " for v in ((0, 255, 0) if (x + y) % 2 else (0, 0, 255)))).save('/tmp/checker-icon.png')\""
+                )
+                notify("-i", "/tmp/checker-icon.png", "Checker", "detail")
+                machine.sleep(2)
+                capture("checker")
+                green = int(machine.succeed(
+                    "python3 -c \"from PIL import Image;"
+                    " print(list(Image.open('/tmp/checker.png').convert('RGB').getdata()).count((0, 255, 0)))\""
+                ))
+                print(f"pure green pixels: {green} of {n * n}")
+                assert green > 0.4 * n * n, green
+
         with subtest("a fullscreen window is detected"):
             if not ${if c.fullscreen or true then "True" else "False"}:
                 print("skipped: ${compositor} can't report fullscreen windows")
