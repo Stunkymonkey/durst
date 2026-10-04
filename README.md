@@ -199,13 +199,17 @@ detection; the `-scale*` variants run at HiDPI scales and check that text is
 rendered at the output's scale.
 
 ```sh
-nix build .#checks.x86_64-linux.vm-hyprland -L   # also: vm-sway, vm-labwc, vm-niri
+nix build .#checks.x86_64-linux.vm-hyprland -L   # also: vm-sway, vm-labwc, vm-niri,
+                                                 #   vm-kwin, vm-river-classic
 nix build .#checks.x86_64-linux.vm-sway-scale1_5 -L  # HiDPI: also vm-sway-scale2, vm-hyprland-scale2
 nix flake check -L                               # all of them
 ```
 
 The screenshots end up in `result/`. niri refuses software rendering on a
-tty, so it runs nested in sway, full screen; durst only talks to niri.
+tty, so it runs nested in sway, full screen; durst only talks to niri. KWin
+runs without plasmashell (a notification daemon itself) and has no
+wlr-foreign-toplevel, so its fullscreen check is skipped. river 0.4 needs a
+separate window manager, so `river-classic` (0.3) stands in for it.
 
 ### fuzzing
 

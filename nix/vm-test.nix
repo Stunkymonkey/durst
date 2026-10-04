@@ -90,6 +90,26 @@ let
       sockets = 2;
       log = "/tmp/niri.log";
     };
+    # KWin alone, without plasmashell (which is a notification daemon
+    # itself); no wlr-screencopy, so screenshots come from QEMU, and no
+    # wlr-foreign-toplevel, so no fullscreen detection
+    kwin = {
+      module.environment.systemPackages = [ pkgs.kdePackages.kwin ];
+      env.KWIN_COMPOSE = "Q";
+      files = { };
+      start = "kwin_wayland --drm --no-lockscreen --no-global-shortcuts";
+      screenshot = "qemu";
+      fullscreen = false;
+    };
+    # river up to 0.3, with built-in window management; river 0.4 leaves
+    # that to a separate program (none in nixpkgs yet) and shows nothing
+    # without one
+    river-classic = {
+      module.environment.systemPackages = [ pkgs.river-classic ];
+      env.WLR_RENDERER = "pixman";
+      files = { };
+      start = "river";
+    };
   };
   c = compositors.${compositor};
   # labwc has no output settings in its config
@@ -171,6 +191,7 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     import json
+    import os
     import shlex
     import time
     from typing import Any, cast
@@ -203,10 +224,19 @@ pkgs.testers.runNixOSTest {
         return abs(a - b) <= SLACK
 
 
+    def capture(name):
+        """a screenshot in /tmp/<name>.png in the VM and in the result"""
+        if "${c.screenshot or "grim"}" == "grim":
+            user(f"grim /tmp/{name}.png")
+            machine.copy_from_machine(f"/tmp/{name}.png")
+        else:
+            machine.screenshot(name)
+            machine.copy_from_host(os.path.join(machine.out_dir, f"{name}.png"), f"/tmp/{name}.png")
+
+
     def boxes(name):
         """notification boxes (380 logical px wide) on a screenshot, and its size"""
-        user(f"grim /tmp/{name}.png")
-        machine.copy_from_machine(f"/tmp/{name}.png")
+        capture(name)
         m = json.loads(machine.succeed(f"python3 /etc/durst-test/measure.py /tmp/{name}.png"))
         return [b for b in m["boxes"] if near(b["w"], px(380))], m["size"]
 
@@ -325,10 +355,13 @@ pkgs.testers.runNixOSTest {
             assert near(x1 - x0, px(48)) and near(y1 - y0, px(48)), (x1 - x0, y1 - y0)
 
         with subtest("a fullscreen window is detected"):
-            user("systemd-run --user --unit=fullscreen foot --fullscreen sleep 600")
-            wait_info("fullscreen", True)
-            user("systemctl --user stop fullscreen")
-            wait_info("fullscreen", False)
+            if not ${if c.fullscreen or true then "True" else "False"}:
+                print("skipped: ${compositor} can't report fullscreen windows")
+            else:
+                user("systemd-run --user --unit=fullscreen foot --fullscreen sleep 600")
+                wait_info("fullscreen", True)
+                user("systemctl --user stop fullscreen")
+                wait_info("fullscreen", False)
 
         with subtest("idle, and active again on input"):
             wait_info("idle", True)

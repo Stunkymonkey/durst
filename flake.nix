@@ -131,6 +131,8 @@
                 { compositor = "labwc"; }
                 { compositor = "hyprland"; }
                 { compositor = "niri"; }
+                { compositor = "kwin"; }
+                { compositor = "river-classic"; }
                 {
                   compositor = "sway";
                   scale = "2";
