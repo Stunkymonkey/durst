@@ -55,7 +55,7 @@ fn stream(path: &PathBuf) -> impl Stream<Item = ()> + use<> {
         log::debug!("watching {}", path.display());
         while rx.next().await.is_some() {
             tokio::time::sleep(DEBOUNCE).await;
-            while rx.try_next().is_ok_and(|e| e.is_some()) {}
+            while rx.try_recv().is_ok() {}
             if output.send(()).await.is_err() {
                 break;
             }

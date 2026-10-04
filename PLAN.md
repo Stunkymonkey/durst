@@ -381,6 +381,7 @@ Notes on deviations, per milestone:
 | R7 | iced_tiny_skia misplaces scaled raster images | Worked around by pre-scaling, to the output's scale on HiDPI (`wl_output` scale): at 2 images are drawn pixel for pixel, at 1.5 shrunk from 2×; in place at both (VM test); not reported upstream yet |
 | R8 | iced_layershell drops changes for surfaces not created yet | Resolved: changes wait for the `Opened` event |
 | R9 | A running daemon and a newer `durstctl` disagree on the interface (seen: "Signature mismatch" from `durstctl info`) | Resolved: `durst-proto` fingerprints its interface definitions at build time, durst publishes it (`InterfaceHash`), durstctl compares on errors and asks to restart durst (exit 5); checked with a daemon built from before the change |
+| R10 | `cargo update` pulls `winit-core`/`winit-common` 0.31.0-beta.3, which iced_layershell 0.19.1 allows but its `iced_exdevtools` doesn't compile with (2026-10-04) | Locked at beta.2: after `cargo update`, run `cargo update -p winit-common --precise 0.31.0-beta.2`; drop once iced_layershell is fixed |
 
 ## 8. Missing parts
 
