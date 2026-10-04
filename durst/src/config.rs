@@ -241,7 +241,7 @@ impl Default for HistoryConfig {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum Anchor {
     TopLeft,
@@ -259,7 +259,7 @@ impl Anchor {
 }
 
 /// `"focused"`, `"all"` or `"name:<output>"`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Output {
     /// the output of the focused window when the first notification
     /// appears (the compositor decides if there is none); the stack stays

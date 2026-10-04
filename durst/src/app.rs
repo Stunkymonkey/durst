@@ -23,7 +23,7 @@ use crate::audio::{self, Target, Volume};
 use crate::config::{self, Anchor, Config, General, MouseAction, Output, Style};
 use crate::config_watch;
 use crate::core::history::History;
-use crate::core::layout::Margin;
+use crate::core::layout::{self, Margin, Placement};
 use crate::core::media::{Players, Status as PlayStatus};
 use crate::core::notification::{Notification, Urgency};
 use crate::core::rules::{self, Context, Fullscreen, IconPosition, Outcome, ScriptOn};
@@ -83,6 +83,17 @@ enum Key {
 /// One surface of a [`Key`]; with `output = "all"` there is one per output.
 type SurfaceKey = (Key, Option<String>);
 
+/// A surface as `sync` wants it.
+#[derive(Clone)]
+struct Placed {
+    key: Key,
+    size: (u32, u32),
+    margin: Margin,
+    anchor: Anchor,
+    /// the stack it belongs to; `None` for the OSDs
+    placement: Option<Placement>,
+}
+
 /// A layer surface and the size and margin last sent for it.
 ///
 /// iced_layershell silently drops changes for surfaces it hasn't created
@@ -95,6 +106,8 @@ struct Surface {
     margin: Margin,
     /// the output it was opened on; `None`: the compositor chose
     output: Option<String>,
+    /// the stack it belongs to; `None` for the OSDs
+    placement: Option<Placement>,
 }
 
 /// A notification as received, what the rules made of it, and its parsed
@@ -167,7 +180,7 @@ pub struct App {
     focused_output: Option<String>,
     /// with `output = "focused"`: where the stack is, while it is shown;
     /// it stays together there and moves to the focus once it is empty
-    stack_output: Option<Option<String>>,
+    stack_outputs: HashMap<Placement, Option<String>>,
     audio: Option<audio::Handle>,
     volumes: HashMap<Target, Option<Volume>>,
     osd: Option<VolumeOsd>,
@@ -237,7 +250,7 @@ impl App {
             fullscreen: false,
             outputs: Vec::new(),
             focused_output: None,
-            stack_output: None,
+            stack_outputs: HashMap::new(),
             audio: None,
             volumes: HashMap::new(),
             osd: None,
@@ -346,13 +359,8 @@ impl App {
                     .filter(|(_, s)| s.output.as_ref().is_some_and(|o| !self.outputs.contains(o)))
                     .map(|(key, _)| key.clone())
                     .collect();
-                if self
-                    .stack_output
-                    .as_ref()
-                    .is_some_and(|o| o.as_ref().is_some_and(|o| !self.outputs.contains(o)))
-                {
-                    self.stack_output = None;
-                }
+                self.stack_outputs
+                    .retain(|_, o| o.as_ref().is_none_or(|o| self.outputs.contains(o)));
                 Task::batch(
                     gone.iter()
                         .map(|key| self.remove_surface(key))
@@ -901,6 +909,19 @@ impl App {
         self.signal(Signal::Closed(id, reason))
     }
 
+    /// The stack of a notification: its rules' anchor and output, else
+    /// `[general]`'s.
+    fn placement(&self, id: u32) -> Placement {
+        let general = &self.config.general;
+        let outcome = self.prepared.get(&id).map(|p| &p.outcome);
+        Placement {
+            anchor: outcome.and_then(|o| o.anchor).unwrap_or(general.anchor),
+            output: outcome
+                .and_then(|o| o.output.clone())
+                .unwrap_or_else(|| general.output.clone()),
+        }
+    }
+
     /// Opens, moves, resizes and closes surfaces to match the store.
     fn sync(&mut self, now: Instant) -> Task<Message> {
         self.load_osd_icon();
@@ -908,37 +929,48 @@ impl App {
         self.store
             .update_timers(general, now, self.idle || self.locked);
 
-        let mut wanted: Vec<(Key, u32)> = self
+        let main = Placement::of(general);
+        let mut stack: Vec<(Key, Placement, u32)> = self
             .store
             .visible(general)
             .iter()
-            .map(|e| (Key::Notification(e.notification.id), e.height))
+            .map(|e| {
+                let id = e.notification.id;
+                (Key::Notification(id), self.placement(id), e.height)
+            })
             .collect();
         let waiting = self.store.waiting(general);
-        let more_height =
-            (waiting > 0).then(|| ui::more_height(waiting, self.config.style(Urgency::Normal)));
-        wanted.extend(more_height.map(|h| (Key::More, h)));
-        let margins = self.store.margins(general, more_height);
-
-        let mut tasks = Vec::new();
-        // the stack stays where it opened until it is empty
-        let stack_shown = wanted
-            .iter()
-            .any(|(key, _)| matches!(key, Key::Notification(_) | Key::More));
-        match (stack_shown, &self.stack_output) {
-            (true, None) => self.stack_output = Some(self.focused_output.clone()),
-            (false, Some(_)) => self.stack_output = None,
-            _ => {}
+        if waiting > 0 {
+            let height = ui::more_height(waiting, self.config.style(Urgency::Normal));
+            stack.push((Key::More, main.clone(), height));
         }
-        // the outputs each key is shown on
-        let outputs: Vec<Option<String>> = match &general.output {
-            Output::All => self.outputs.iter().cloned().map(Some).collect(),
-            _ => vec![None],
-        };
-        let mut placed: Vec<(Key, (u32, u32), Margin, Anchor)> = wanted
+        let margins = layout::stacks_margins(
+            general,
+            &stack.iter().map(|(_, p, h)| (p, *h)).collect::<Vec<_>>(),
+        );
+
+        // a stack on the focused output stays where it opened until it is
+        // empty
+        self.stack_outputs
+            .retain(|p, _| stack.iter().any(|(_, q, _)| q == p));
+        for (_, placement, _) in &stack {
+            if placement.output == Output::Focused {
+                self.stack_outputs
+                    .entry(placement.clone())
+                    .or_insert_with(|| self.focused_output.clone());
+            }
+        }
+
+        let mut placed: Vec<Placed> = stack
             .into_iter()
             .zip(margins)
-            .map(|((key, height), margin)| (key, (general.width, height), margin, general.anchor))
+            .map(|((key, placement, height), margin)| Placed {
+                key,
+                size: (general.width, height),
+                margin,
+                anchor: placement.anchor,
+                placement: Some(placement),
+            })
             .collect();
         if let Some(content) = self.osd_content() {
             let osd = &self.config.osd.volume;
@@ -948,8 +980,13 @@ impl App {
                 offset: osd.offset,
                 ..general.clone()
             };
-            let margin = crate::core::layout::stack_margins(&place, &[height])[0];
-            placed.push((Key::VolumeOsd, (osd.width, height), margin, osd.anchor));
+            placed.push(Placed {
+                key: Key::VolumeOsd,
+                size: (osd.width, height),
+                margin: layout::stack_margins(&place, &[height])[0],
+                anchor: osd.anchor,
+                placement: None,
+            });
         }
         if let Some(content) = self.media_content() {
             let osd = &self.config.osd.media;
@@ -959,28 +996,54 @@ impl App {
                 offset: osd.offset,
                 ..general.clone()
             };
-            let margin = crate::core::layout::stack_margins(&place, &[height])[0];
-            placed.push((Key::MediaOsd, (osd.width, height), margin, osd.anchor));
+            placed.push(Placed {
+                key: Key::MediaOsd,
+                size: (osd.width, height),
+                margin: layout::stack_margins(&place, &[height])[0],
+                anchor: osd.anchor,
+                placement: None,
+            });
         }
-        let wanted: Vec<(SurfaceKey, (u32, u32), Margin, Anchor)> = placed
+        // one surface per output with `output = "all"` (the OSDs follow
+        // `[general]`), else one
+        let wanted: Vec<(SurfaceKey, Placed)> = placed
             .into_iter()
-            .flat_map(|(key, size, margin, anchor)| {
+            .flat_map(|p| {
+                let choice = p.placement.as_ref().map_or(&general.output, |p| &p.output);
+                let outputs: Vec<Option<String>> = match choice {
+                    Output::All => self.outputs.iter().cloned().map(Some).collect(),
+                    _ => vec![None],
+                };
                 outputs
-                    .iter()
-                    .map(move |output| ((key, output.clone()), size, margin, anchor))
+                    .into_iter()
+                    .map(move |output| ((p.key, output), p.clone()))
             })
             .collect();
+        // gone, or moved to another stack: a surface's anchor and output are
+        // fixed once it is open
+        let mut tasks = Vec::new();
         let gone: Vec<SurfaceKey> = self
             .surfaces
-            .keys()
-            .filter(|skey| !wanted.iter().any(|(k, ..)| k == *skey))
-            .cloned()
+            .iter()
+            .filter(|(skey, surface)| {
+                !wanted
+                    .iter()
+                    .any(|(k, p)| k == *skey && p.placement == surface.placement)
+            })
+            .map(|(skey, _)| skey.clone())
             .collect();
         for skey in gone {
             tasks.push(self.remove_surface(&skey));
         }
 
-        for (skey, size, margin, anchor) in wanted {
+        for (skey, wanted) in wanted {
+            let Placed {
+                size,
+                margin,
+                anchor,
+                placement,
+                ..
+            } = wanted;
             match self.surfaces.get_mut(&skey) {
                 // changes wait until the surface exists
                 Some(surface) if !surface.opened => {}
@@ -1001,13 +1064,17 @@ impl App {
                     }
                 }
                 None => {
-                    let output = match (&general.output, &skey) {
-                        (_, (_, Some(name))) | (Output::Name(name), _) => Some(name.clone()),
-                        (_, (Key::Notification(_) | Key::More, None)) => {
-                            self.stack_output.clone().flatten()
-                        }
+                    let output = match (&skey.1, &placement) {
+                        (Some(name), _) => Some(name.clone()),
+                        (None, Some(p)) => match &p.output {
+                            Output::Name(name) => Some(name.clone()),
+                            _ => self.stack_outputs.get(p).cloned().flatten(),
+                        },
                         // the OSDs open where the focus is
-                        _ => self.focused_output.clone(),
+                        (None, None) => match &general.output {
+                            Output::Name(name) => Some(name.clone()),
+                            _ => self.focused_output.clone(),
+                        },
                     };
                     log::debug!("open {skey:?} on {output:?}");
                     let (window, open) = Message::layershell_open(NewLayerShellSettings {
@@ -1034,6 +1101,7 @@ impl App {
                             size,
                             margin,
                             output,
+                            placement,
                         },
                     );
                     tasks.push(open);

@@ -10,7 +10,7 @@ use regex::Regex;
 use serde::{Deserialize, Deserializer};
 
 use super::notification::{Notification, Urgency};
-use crate::config::Timeout;
+use crate::config::{Anchor, Output, Timeout};
 
 #[derive(Debug, Clone)]
 pub struct Pattern(Regex);
@@ -139,6 +139,9 @@ pub struct Rule {
     /// used when the notification has no icon
     default_icon: Option<String>,
     icon_position: Option<IconPosition>,
+    /// a stack of its own in this corner and/or on this output
+    anchor: Option<Anchor>,
+    output: Option<Output>,
     /// overrides for the style, like `[urgency.*.style]`
     pub style: toml::Table,
     timeout: Option<Timeout>,
@@ -177,6 +180,9 @@ pub struct Outcome {
     pub style: toml::Table,
     pub default_icon: Option<String>,
     pub icon_position: IconPosition,
+    /// `None`: `[general]`'s
+    pub anchor: Option<Anchor>,
+    pub output: Option<Output>,
     pub timeout: Option<Timeout>,
     pub skip_display: bool,
     pub history_ignore: bool,
@@ -258,6 +264,10 @@ impl Rule {
         if let Some(p) = self.icon_position {
             out.icon_position = p;
         }
+        if self.anchor.is_some() {
+            out.anchor = self.anchor;
+        }
+        set(&mut out.output, &self.output);
         if self.timeout.is_some() {
             out.timeout = self.timeout;
         }
@@ -277,7 +287,7 @@ impl Rule {
     }
 }
 
-fn set(target: &mut Option<String>, value: &Option<String>) {
+fn set<T: Clone>(target: &mut Option<T>, value: &Option<T>) {
     if value.is_some() {
         target.clone_from(value);
     }
@@ -459,6 +469,26 @@ mod tests {
         let out = apply(&r, &mut n, &modes(&[]));
         assert_eq!((n.app_icon.as_str(), n.hints.image_path), ("mail", None));
         assert_eq!(out.icon_position, IconPosition::Right);
+    }
+
+    #[test]
+    fn placement() {
+        let r = rules(
+            "[[rule]]\nurgency = \"critical\"\nanchor = \"bottom\"\n\
+             [[rule]]\napp_name = \"^x$\"\noutput = \"name:DP-2\"",
+        );
+        let mut n = test_notification(1);
+        let out = apply(&r, &mut n, &modes(&[]));
+        assert_eq!(
+            (out.anchor, out.output),
+            (None, None),
+            "no match: general's"
+        );
+        n.hints.urgency = Urgency::Critical;
+        n.app_name = "x".into();
+        let out = apply(&r, &mut n, &modes(&[]));
+        assert_eq!(out.anchor, Some(Anchor::Bottom));
+        assert_eq!(out.output, Some(Output::Name("DP-2".into())));
     }
 
     #[test]

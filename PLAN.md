@@ -194,10 +194,17 @@ Evaluated in order; each sees the notification as earlier rules left it.
 |---|---|
 | Matchers | `app_name`, `summary`, `body`, `icon`, `category`, `desktop_entry`, `stack_tag` (regexes, each also `not_…`), `urgency`, `not_urgency`, `transient`, `has_actions`, `mode`, `not_mode`, `fullscreen_active` |
 | Content | `set_summary`, `set_body` (templates: `{app_name} {summary} {body} {category} {urgency}`), `hide_body`, `set_urgency`, `set_category`, `set_stack_tag`, `set_icon`, `set_transient` |
-| Display | `style`, `default_icon`, `icon_position`, `timeout` |
+| Display | `style`, `default_icon`, `icon_position`, `timeout`, `anchor`, `output` |
 | Visibility | `skip_display`, `history_ignore`, `defer`, `fullscreen = show \| delay \| pushback` |
 | Actions | `default_action`, `auto_invoke` |
 | Side effects | `script` + `script_on = receive \| action \| close` (`DURST_*` variables), `sound`, `mute_sound` |
+
+`anchor`/`output` give the matching notifications a stack of their own,
+laid out independently (each `focused` stack stays on its output until it
+is empty); `max_visible` counts all stacks, the "+N more" line belongs to
+`[general]`'s. A notification replaced into another stack is reopened
+there, since a layer surface's anchor and output are fixed. Stacks with
+the same anchor on the same output overlap.
 
 ### 4.6 History
 
@@ -315,11 +322,11 @@ Notes on deviations, per milestone:
 
 ## 6. Testing
 
-- **Unit (64 tests):** core logic with injected time (timers, sorting,
+- **Unit (65 tests):** core logic with injected time (timers, sorting,
   duplicates, stack tags, held entries, history, rules, modes, media players,
   layout), config parsing and errors, markup, hint and metadata parsing, pod
   encoding, sound and cover helpers.
-- **Visual (42 scenarios):** `scripts/visual/run.sh` runs durst in an
+- **Visual (43 scenarios):** `scripts/visual/run.sh` runs durst in an
   isolated headless sway with a private D-Bus session, a fake logind, a
   private PipeWire with a null sink and source, and fake MPRIS players; mouse
   input via a virtual pointer. Scenarios send notifications, click, drag,
@@ -365,7 +372,6 @@ Notes on deviations, per milestone:
 
 ### Planned but not built
 
-12. **Per-rule `anchor`/`output`** (needs one stack per anchor).
 14. **Focus by activation token:** the token carries no input serial, so
     sway only marks the app's window urgent instead of focusing it (tested;
     other compositors not). A serial needs iced_layershell to pass on the
@@ -390,5 +396,4 @@ Notes on deviations, per milestone:
 1. Finish the daily-driver test, fix what comes up (each fix with a
    scenario).
 2. Finish item 2 with Firefox (and mpv with mpv-mpris, if used).
-3. Item 12 (per-rule anchor/output) if wanted.
-4. PR to `master` of durst-notification/durst (conflicts in 5 files).
+3. PR to `master` of durst-notification/durst (conflicts in 5 files).
