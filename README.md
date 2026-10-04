@@ -194,10 +194,13 @@ The visual tests run on sway only. `nix/vm-test.nix` checks the basics on
 other compositors, each in a NixOS VM (needs KVM; no GPU, so software
 rendering): durst starts from its packaged systemd unit, output names, a
 notification's position and a rule's own stack (measured on a screenshot),
-a click through QEMU's tablet, fullscreen and idle detection.
+a click through QEMU's tablet, an image icon's position, fullscreen and idle
+detection; the `-scale*` variants run at HiDPI scales and check that text is
+rendered at the output's scale.
 
 ```sh
 nix build .#checks.x86_64-linux.vm-hyprland -L   # also: vm-sway, vm-labwc, vm-niri
+nix build .#checks.x86_64-linux.vm-sway-scale1_5 -L  # HiDPI: also vm-sway-scale2, vm-hyprland-scale2
 nix flake check -L                               # all of them
 ```
 
