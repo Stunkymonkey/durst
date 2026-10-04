@@ -328,7 +328,7 @@ Notes on deviations, per milestone:
 
 ## 6. Testing
 
-- **Unit (65 tests):** core logic with injected time (timers, sorting,
+- **Unit (66 tests):** core logic with injected time (timers, sorting,
   duplicates, stack tags, held entries, history, rules, modes, media players,
   layout), config parsing and errors, markup, hint and metadata parsing, pod
   encoding, sound and cover helpers.
@@ -357,7 +357,10 @@ Notes on deviations, per milestone:
   HiDPI: sway at 2 and 1.5, Hyprland at 2; every size and position scales
   exactly (an image icon's too, R7), text is rendered at the output's scale
   (at 2: 39 % of the text's 2×2 blocks uniform, 100 % if a 1x image were
-  doubled; fractional scales through `fractional-scale-v1`).
+  doubled; fractional scales through `fractional-scale-v1`). Raster images
+  (icons, covers) are kept at the scale of the output they are shown on: a
+  1 px checkerboard icon arrives pixel for pixel at scale 2 (before: scaled
+  to 48 px and enlarged, no detail left).
 - **Package:** `nix build` works locally, in CI and on the remote builder
   (`--max-jobs 0`, 2026-10-04; an earlier failure there is gone).
 - **CI:** `.github/workflows/rust.yml` runs fmt, clippy, tests, all visual
@@ -375,7 +378,7 @@ Notes on deviations, per milestone:
 | R4 | Choosing the focused output | Resolved 2026-10-03 (see M-notes) |
 | R5 | PipeWire complexity | Resolved in M6; hardware route writes untested (section 8) |
 | R6 | Slider floods PipeWire | Resolved: one update per 30 ms |
-| R7 | iced_tiny_skia misplaces scaled raster images | Worked around by pre-scaling; at output scales 2 and 1.5 icons sit exactly in place (VM test), but are soft (item 20); not reported upstream yet |
+| R7 | iced_tiny_skia misplaces scaled raster images | Worked around by pre-scaling, to the output's scale on HiDPI (`wl_output` scale): at 2 images are drawn pixel for pixel, at 1.5 shrunk from 2×; in place at both (VM test); not reported upstream yet |
 | R8 | iced_layershell drops changes for surfaces not created yet | Resolved: changes wait for the `Opened` event |
 | R9 | A running daemon and a newer `durstctl` disagree on the interface (seen: "Signature mismatch" from `durstctl info`) | Resolved: `durst-proto` fingerprints its interface definitions at build time, durst publishes it (`InterfaceHash`), durstctl compares on errors and asks to restart durst (exit 5); checked with a daemon built from before the change |
 
@@ -387,12 +390,6 @@ Nothing open: compositors and HiDPI run in VM tests (6. Testing). river
 0.4 can be added once a window manager for it is in nixpkgs.
 
 ### Planned but not built
-
-20. **Sharp raster icons on HiDPI:** images are scaled to `icon_size`
-    logical pixels when loaded, so at scale 2 the renderer enlarges a
-    48 px image to 96 px (soft; SVGs are not affected). Needs the output's
-    scale when loading, and the images kept at `icon_size × scale`. Found
-    with the VM test (a checkerboard image lost its detail at scale 2).
 
 14. **Focus by activation token:** the token carries no input serial, so
     sway only marks the app's window urgent instead of focusing it (tested;

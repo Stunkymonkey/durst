@@ -10,7 +10,8 @@ use iced::widget::image::Handle;
 use crate::config::Style;
 use crate::core::notification::Notification;
 
-/// An icon and the size it is drawn at.
+/// An icon and the size it is drawn at, in logical pixels; a raster image's
+/// pixels are that times the output scale it was prepared for.
 #[derive(Debug, Clone)]
 pub enum Icon {
     Svg {
@@ -42,12 +43,14 @@ impl Icon {
 
 /// How big icons are drawn: raster images keep their own size within
 /// `min..=max`; SVGs, which have none, are drawn at `size`, which is also the
-/// size asked for from the icon theme.
+/// size asked for from the icon theme. Raster images are kept at `scale`
+/// times that (the output's scale), so they stay sharp on HiDPI outputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sizes {
     pub size: u32,
     pub min: u32,
     pub max: u32,
+    pub scale: u32,
 }
 
 impl Sizes {
@@ -57,6 +60,15 @@ impl Sizes {
             size,
             min: size,
             max: size,
+            scale: 1,
+        }
+    }
+
+    /// for an output with this scale
+    pub fn at(self, scale: u32) -> Self {
+        Self {
+            scale: scale.max(1),
+            ..self
         }
     }
 
@@ -69,6 +81,7 @@ impl Sizes {
             size: style.icon_size.clamp(min, max),
             min,
             max,
+            scale: 1,
         }
     }
 
@@ -106,7 +119,7 @@ pub fn resolve(n: &Notification, sizes: Sizes, theme: Option<&str>) -> Option<Ic
     .into_iter()
     .flatten()
     .filter(|s| !s.is_empty())
-    .find_map(|s| lookup(s, sizes.size, theme))
+    .find_map(|s| lookup(s, sizes, theme))
     .and_then(|path| load(path, sizes))
 }
 
@@ -126,7 +139,7 @@ fn raster(img: RgbaImage, sizes: Sizes) -> Icon {
     let (w, h) = img.dimensions();
     let (width, height) = sizes.fit(w, h);
     Icon::Raster {
-        handle: resize(img, width, height),
+        handle: resize(img, width * sizes.scale, height * sizes.scale),
         width,
         height,
     }
@@ -163,7 +176,7 @@ pub(crate) fn decode(reader: ImageReader<impl BufRead + Seek>) -> ImageResult<Dy
 
 /// An icon by name or path, e.g. a rule's `default_icon`.
 pub fn resolve_name(name: &str, sizes: Sizes, theme: Option<&str>) -> Option<Icon> {
-    lookup(name, sizes.size, theme).and_then(|path| load(path, sizes))
+    lookup(name, sizes, theme).and_then(|path| load(path, sizes))
 }
 
 fn load(path: PathBuf, sizes: Sizes) -> Option<Icon> {
@@ -185,7 +198,7 @@ fn load(path: PathBuf, sizes: Sizes) -> Option<Icon> {
     }
 }
 
-fn lookup(name: &str, size: u32, theme: Option<&str>) -> Option<PathBuf> {
+fn lookup(name: &str, sizes: Sizes, theme: Option<&str>) -> Option<PathBuf> {
     let name = name.strip_prefix("file://").unwrap_or(name);
     if name.starts_with('/') {
         let path = PathBuf::from(name);
@@ -194,10 +207,12 @@ fn lookup(name: &str, size: u32, theme: Option<&str>) -> Option<PathBuf> {
     let theme = theme
         .or_else(|| gtk_theme().as_deref())
         .unwrap_or("hicolor");
-    let size = u16::try_from(size).unwrap_or(u16::MAX);
+    let size = u16::try_from(sizes.size).unwrap_or(u16::MAX);
+    let scale = u16::try_from(sizes.scale).unwrap_or(1);
     // falls back to the theme's parents, then hicolor
     let found = freedesktop_icons::lookup(name)
         .with_size(size)
+        .with_scale(scale)
         .with_theme(theme)
         .with_cache()
         .find();
@@ -260,12 +275,28 @@ mod tests {
             size: 48,
             min: 32,
             max: 64,
+            scale: 1,
         };
         assert_eq!(sizes.fit(40, 40), (40, 40), "in range: own size");
         assert_eq!(sizes.fit(16, 16), (32, 32), "too small: scaled up");
         assert_eq!(sizes.fit(256, 128), (64, 32), "too big: scaled down");
         assert_eq!(sizes.fit(8, 16), (16, 32), "longer side counts");
         assert_eq!(Sizes::fixed(48).fit(20, 10), (48, 24));
+    }
+
+    #[test]
+    fn raster_icons_keep_the_output_scale_in_pixels() {
+        let img = RgbaImage::new(100, 50);
+        let Icon::Raster {
+            handle: Handle::Rgba { width, height, .. },
+            width: w,
+            height: h,
+        } = raster(img, Sizes::fixed(48).at(2))
+        else {
+            panic!("not an RGBA raster icon");
+        };
+        assert_eq!((w, h), (48, 24), "laid out in logical pixels");
+        assert_eq!((width, height), (96, 48), "drawn with twice the pixels");
     }
 
     #[test]
@@ -282,7 +313,8 @@ mod tests {
             Sizes {
                 size: 32,
                 min: 16,
-                max: 32
+                max: 32,
+                scale: 1
             },
             "icon_size is kept in the range"
         );

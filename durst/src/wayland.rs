@@ -34,8 +34,8 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
 pub enum Event {
     Idle(bool),
     Fullscreen(bool),
-    /// the names of all outputs, sorted
-    Outputs(Vec<String>),
+    /// the names of all outputs, sorted, with their (integer) scale
+    Outputs(Vec<(String, u32)>),
     /// the output of the focused window; `None` without one (e.g. an empty
     /// workspace), then the compositor decides
     FocusedOutput(Option<String>),
@@ -134,11 +134,11 @@ pub struct State {
     seat: Option<wl_seat::WlSeat>,
     idle_notifier: Option<ExtIdleNotifierV1>,
     idle_notification: Option<ExtIdleNotificationV1>,
-    /// by registry name: the output and its name once known
-    outputs: HashMap<u32, (wl_output::WlOutput, Option<String>)>,
+    /// by registry name: the output, its name once known, and its scale
+    outputs: HashMap<u32, (wl_output::WlOutput, Option<String>, u32)>,
     toplevels: HashMap<ObjectId, Toplevel>,
     sent_fullscreen: bool,
-    sent_outputs: Vec<String>,
+    sent_outputs: Vec<(String, u32)>,
     sent_focused_output: Option<String>,
 }
 
@@ -173,8 +173,8 @@ impl State {
             t.outputs.iter().find_map(|id| {
                 self.outputs
                     .values()
-                    .find(|(output, _)| &output.id() == id)
-                    .and_then(|(_, name)| name.clone())
+                    .find(|(output, ..)| &output.id() == id)
+                    .and_then(|(_, name, _)| name.clone())
             })
         });
         if focused != self.sent_focused_output {
@@ -184,15 +184,15 @@ impl State {
     }
 
     fn update_outputs(&mut self) {
-        let mut names: Vec<String> = self
+        let mut outputs: Vec<(String, u32)> = self
             .outputs
             .values()
-            .filter_map(|(_, name)| name.clone())
+            .filter_map(|(_, name, scale)| Some((name.clone()?, *scale)))
             .collect();
-        names.sort();
-        if names != self.sent_outputs {
-            self.sent_outputs = names.clone();
-            self.send(Event::Outputs(names));
+        outputs.sort();
+        if outputs != self.sent_outputs {
+            self.sent_outputs = outputs.clone();
+            self.send(Event::Outputs(outputs));
         }
         self.update_focused_output();
     }
@@ -271,12 +271,12 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                 // version 4 announces the output's name
                 "wl_output" if version >= 4 => {
                     let output = registry.bind(name, 4, qh, name);
-                    state.outputs.insert(name, (output, None));
+                    state.outputs.insert(name, (output, None, 1));
                 }
                 _ => {}
             },
             wl_registry::Event::GlobalRemove { name } => {
-                if let Some((output, _)) = state.outputs.remove(&name) {
+                if let Some((output, ..)) = state.outputs.remove(&name) {
                     output.release();
                     state.update_outputs();
                 }
@@ -299,6 +299,11 @@ impl Dispatch<wl_output::WlOutput, u32> for State {
             wl_output::Event::Name { name } => {
                 if let Some(entry) = state.outputs.get_mut(global) {
                     entry.1 = Some(name);
+                }
+            }
+            wl_output::Event::Scale { factor } => {
+                if let Some(entry) = state.outputs.get_mut(global) {
+                    entry.2 = u32::try_from(factor).unwrap_or(1).max(1);
                 }
             }
             wl_output::Event::Done => state.update_outputs(),

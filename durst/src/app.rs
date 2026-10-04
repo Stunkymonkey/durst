@@ -176,6 +176,8 @@ pub struct App {
     /// a focused window is fullscreen
     fullscreen: bool,
     outputs: Vec<String>,
+    /// each output's (integer) scale, for images sharp on HiDPI outputs
+    output_scales: HashMap<String, u32>,
     /// the output of the focused window, from wlr-foreign-toplevel
     focused_output: Option<String>,
     /// with `output = "focused"`: where the stack is, while it is shown;
@@ -249,6 +251,7 @@ impl App {
             locked: false,
             fullscreen: false,
             outputs: Vec::new(),
+            output_scales: HashMap::new(),
             focused_output: None,
             stack_outputs: HashMap::new(),
             audio: None,
@@ -351,7 +354,10 @@ impl App {
             }
             Message::Wayland(wayland::Event::Outputs(outputs)) => {
                 log::debug!("outputs: {outputs:?}");
-                self.outputs = outputs;
+                let scales: HashMap<String, u32> = outputs.iter().cloned().collect();
+                let rescaled = scales != self.output_scales;
+                self.outputs = outputs.into_iter().map(|(name, _)| name).collect();
+                self.output_scales = scales;
                 // surfaces on a removed output are gone: open them again
                 let gone: Vec<SurfaceKey> = self
                     .surfaces
@@ -361,11 +367,14 @@ impl App {
                     .collect();
                 self.stack_outputs
                     .retain(|_, o| o.as_ref().is_none_or(|o| self.outputs.contains(o)));
-                Task::batch(
-                    gone.iter()
-                        .map(|key| self.remove_surface(key))
-                        .collect::<Vec<_>>(),
-                )
+                let mut tasks: Vec<_> = gone.iter().map(|key| self.remove_surface(key)).collect();
+                if rescaled {
+                    // images are kept at the output's scale: load them again
+                    self.osd_icons.clear();
+                    self.covers.clear();
+                    tasks.push(self.reevaluate());
+                }
+                Task::batch(tasks)
             }
             Message::Wayland(wayland::Event::Activation(activator)) => {
                 self.activator = Some(activator);
@@ -658,10 +667,13 @@ impl App {
         let theme = self.config.general.icon_theme.as_deref();
         let icon = match outcome.icon_position {
             IconPosition::Off => None,
-            _ => icons::resolve(n, icons::Sizes::of(&style), theme).or_else(|| {
-                let name = outcome.default_icon.as_deref()?;
-                icons::resolve_name(name, icons::Sizes::of(&style), theme)
-            }),
+            _ => {
+                let sizes = icons::Sizes::of(&style).at(self.output_scale(&outcome));
+                icons::resolve(n, sizes, theme).or_else(|| {
+                    let name = outcome.default_icon.as_deref()?;
+                    icons::resolve_name(name, sizes, theme)
+                })
+            }
         };
         let body = ui::fit_body(
             markup::parse(&n.body),
@@ -912,14 +924,45 @@ impl App {
     /// The stack of a notification: its rules' anchor and output, else
     /// `[general]`'s.
     fn placement(&self, id: u32) -> Placement {
+        self.placement_of(self.prepared.get(&id).map(|p| &p.outcome))
+    }
+
+    fn placement_of(&self, outcome: Option<&Outcome>) -> Placement {
         let general = &self.config.general;
-        let outcome = self.prepared.get(&id).map(|p| &p.outcome);
         Placement {
             anchor: outcome.and_then(|o| o.anchor).unwrap_or(general.anchor),
             output: outcome
                 .and_then(|o| o.output.clone())
                 .unwrap_or_else(|| general.output.clone()),
         }
+    }
+
+    /// The scale of the output a notification with these rules' outcome
+    /// is shown on (the largest one with `"all"`, or when not known yet).
+    fn output_scale(&self, outcome: &Outcome) -> u32 {
+        let placement = self.placement_of(Some(outcome));
+        let largest = self.output_scales.values().copied().max().unwrap_or(1);
+        let output = match &placement.output {
+            Output::All => None,
+            Output::Name(name) => Some(name.clone()),
+            Output::Focused => self
+                .stack_outputs
+                .get(&placement)
+                .cloned()
+                .flatten()
+                .or_else(|| self.focused_output.clone()),
+        };
+        output
+            .and_then(|o| self.output_scales.get(&o).copied())
+            .unwrap_or(largest)
+    }
+
+    /// The focused output's scale, where the OSDs open.
+    fn focused_scale(&self) -> u32 {
+        self.focused_output
+            .as_ref()
+            .and_then(|o| self.output_scales.get(o).copied())
+            .unwrap_or_else(|| self.output_scales.values().copied().max().unwrap_or(1))
     }
 
     /// Opens, moves, resizes and closes surfaces to match the store.
@@ -1412,7 +1455,8 @@ impl App {
         if self.covers.contains_key(&url) || !self.covers_loading.insert(url.clone()) {
             return Task::none();
         }
-        let size = self.config.osd.media.cover_size;
+        // kept at the output's scale, drawn at cover_size
+        let size = self.config.osd.media.cover_size * self.focused_scale();
         Task::perform(cover::load(url.clone(), size), move |handle| {
             Message::Cover(url.clone(), handle)
         })
@@ -1468,7 +1512,8 @@ impl App {
         if !self.osd_icons.contains_key(name) {
             let size = self.config.style(Urgency::Normal).icon_size;
             let theme = self.config.general.icon_theme.as_deref();
-            let icon = icons::resolve_name(name, icons::Sizes::fixed(size), theme);
+            let sizes = icons::Sizes::fixed(size).at(self.focused_scale());
+            let icon = icons::resolve_name(name, sizes, theme);
             if icon.is_none() {
                 log::debug!("no icon {name} in the icon theme");
             }
