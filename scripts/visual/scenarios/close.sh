@@ -4,12 +4,12 @@ clicked=$(notify "Click me")
 closed=$(notify "Closed via D-Bus")
 expired=$(notify -t 300 "Expires")
 kept=$(notify "Stays")
-sleep 0.5
+# the first one is on top whether the expiring one is still there or not
+snap 'len(boxes) >= 3'
 click 1000 40
 gdbus call --session --dest org.freedesktop.Notifications \
     --object-path /org/freedesktop/Notifications \
     --method org.freedesktop.Notifications.CloseNotification "$closed" >/dev/null
-sleep 0.5
 
 verify() {
     signals

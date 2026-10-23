@@ -4,7 +4,7 @@
 config="$XDG_CONFIG_HOME/durst/config.toml"
 mkdir -p "$(dirname "$config")"
 notify "Reload me" "the box gets narrower" >/dev/null
-snap
+snap 'len(boxes) == 1'
 before=$(geom 0 w)
 printf '[general]\nwidth = 300\n' >"$config"
 reload_ok=$(status durstctl reload)

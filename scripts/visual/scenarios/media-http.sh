@@ -5,11 +5,11 @@ base=$(serve "$DURST_TEST_DIR/www")
 player_start test
 player test status Playing
 player test "track 1|Missing cover|Artist|$base/missing.png"
-sleep 0.5
-snap
+# the request has failed
+wait_for grep -q missing.png "$DURST_TEST_DIR/http.log"
+snap 'len(boxes) == 1'
 missing=$(pixel $(( $(geom 0 x) + 14 + 36 )) $(( $(geom 0 y) + 14 + 36 )))
 player test "track 2|Remote cover|Artist|$base/blue.png"
-sleep 0.5
 
 verify() {
     cover=$(pixel $(( $(python3 -c "import json;print(json.load(open('$MEASURE'))['boxes'][0]['x'])") + 14 + 36 )) $(( 20 + 14 + 36 )))

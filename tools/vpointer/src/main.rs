@@ -9,6 +9,9 @@
 //!   press BUTTON    press and hold, e.g. to drag
 //!   release BUTTON
 //!   scroll DY       vertical scroll, positive is down
+//!
+//! Each command is answered with a line `ok` on stdout once the compositor
+//! has processed it, so the harness waits for that instead of sleeping.
 
 use std::io::BufRead;
 use std::time::Instant;
@@ -115,6 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         pointer.frame();
         queue.roundtrip(&mut State)?;
+        println!("ok");
     }
     Ok(())
 }

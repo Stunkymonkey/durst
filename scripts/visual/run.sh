@@ -7,9 +7,14 @@
 # compositor and the screen stay untouched.
 #
 # usage: scripts/visual/run.sh <scenario.sh> [out.png]
-#   Env: DURST_BIN (default target/debug/durst), DURST_ARGS, SETTLE (seconds
-#   before the screenshot, default 1), RESOLUTION (default 1280x720),
-#   KEEP_LOGS=1.
+#   Env: DURST_BIN (default target/debug/durst), DURST_ARGS, WAIT (seconds
+#   after which any wait below gives up, default 10; raise it on slow
+#   machines), RESOLUTION (default 1280x720), KEEP_LOGS=1.
+#
+# durst works asynchronously, but a scenario never sleeps to let it catch up:
+# it waits for what it expects (`await`, `wait_for`, `snap EXPR`), and
+# `verify` is retried until it passes or WAIT is over. A `sleep` in a
+# scenario is only for time that has to pass, such as a timeout.
 #
 # A scenario is sourced inside the sandbox. It runs notify-send/gdbus calls and
 # may use these helpers:
@@ -17,10 +22,16 @@
 #   click X Y [BUTTON]  click on the screen (BUTTON: left, right, middle)
 #   pointer X Y         move the pointer
 #   scroll DY           scroll at the pointer, positive is down
+#                       (input returns once the compositor has handled it)
 #   signals             print the notification and control interface
 #                       signals so far, one per line: MEMBER ARGS...
-#   wait_for CMD...     retry CMD for up to 3s
-#   snap                screenshot + measure now; `geom I KEY` then prints
+#   signaled LINE       whether `signals` printed LINE
+#   wait_for CMD...     retry CMD until it succeeds; fails the run after WAIT
+#   await VALUE CMD...  print CMD's output once it is VALUE (after WAIT, the
+#                       last output, for verify to report)
+#   await_match RE CMD... the same with a regular expression (whole output)
+#   snap [EXPR]         screenshot + measure once the screen is still and
+#                       EXPR (as for `check`) holds; `geom I KEY` then prints
 #                       boxes[I][KEY] (x, y, w, h, bottom, right)
 #   pixel X Y           "R G B" of the last screenshot (snap or final)
 #   durstctl ...        the CLI built next to durst
@@ -50,7 +61,9 @@
 # $DURST_TEST_DIR is a scratch directory, also visible to durst.
 # A file `<scenario>.toml` next to the scenario is used as durst's config.
 # The scenario may define `verify`, called after the screenshot with $MEASURE
-# pointing to the measurement JSON; a non-zero return fails the run.
+# pointing to the measurement JSON; a non-zero return fails the run. Until it
+# passes, the screenshot is taken again and verify retried, for up to WAIT:
+# verify describes the final state, not a moment.
 # `check EXPR` evaluates a Python expression over `boxes`, `gaps` and `size`.
 set -euo pipefail
 
@@ -127,13 +140,48 @@ export SWAYSOCK="$(sed -n 2p "$work/env")"
 
 # headless sway has no input devices: a virtual pointer that lives for the
 # whole run, created before durst so its seat already has a pointer
-mkfifo "$work/pointer"
+mkfifo "$work/pointer" "$work/pointer-ack"
+# opened read-write, so that vpointer's open doesn't wait for a reader
+exec 6<>"$work/pointer-ack"
 LD_LIBRARY_PATH="$durst_ld" "${VPOINTER_BIN:-$root/target/debug/vpointer}" \
-    "$(( ${res%x*} * outputs ))" "${res#*x}" <"$work/pointer" >"$log/vpointer.log" 2>&1 &
+    "$(( ${res%x*} * outputs ))" "${res#*x}" <"$work/pointer" >"$work/pointer-ack" 2>"$log/vpointer.log" &
 exec 3>"$work/pointer"
+WAIT="${WAIT:-10}"
 wait_for() {
-    for _ in $(seq 30); do "$@" >/dev/null 2>&1 && return 0; sleep 0.1; done
-    "$@"
+    local deadline=$((SECONDS + WAIT))
+    until "$@" >/dev/null 2>&1; do
+        if ((SECONDS >= deadline)); then
+            echo "gave up waiting for: $*" >&2
+            return 1
+        fi
+        sleep 0.1
+    done
+}
+# await VALUE CMD...: CMD's output once it is VALUE, else the last one
+await() {
+    local want=$1 got deadline=$((SECONDS + WAIT))
+    shift
+    while got=$("$@" 2>/dev/null) || true; [[ $got != "$want" ]] && ((SECONDS < deadline)); do
+        sleep 0.1
+    done
+    printf '%s\n' "$got"
+}
+await_match() {
+    local re=$1 got deadline=$((SECONDS + WAIT))
+    shift
+    while got=$("$@" 2>/dev/null) || true; ! [[ $got =~ ^($re)$ ]] && ((SECONDS < deadline)); do
+        sleep 0.1
+    done
+    printf '%s\n' "$got"
+}
+# vpointer CMD...: send commands and wait until the compositor has them
+vpointer() {
+    printf '%s\n' "$@" >&3
+    local _cmd _ack
+    for _cmd in "$@"; do
+        read -r -t "$WAIT" _ack <&6 \
+            || { echo "vpointer does not answer, see $log/vpointer.log" >&2; return 1; }
+    done
 }
 wait_for sh -c "swaymsg -t get_seats -r | grep -q '\"capabilities\": [1-9]'" \
     || { echo "virtual pointer missing, see $log/vpointer.log" >&2; KEEP_LOGS=1; exit 1; }
@@ -224,18 +272,10 @@ signals() {
          /^ +variant +(uint32|string)/ { $1 = ""; $2 = ""; line = line " " $0 }
          END { if (line) print line }' "$work/signals"
 }
-click() {
-    printf 'move %s %s\nclick %s\n' "$1" "$2" "${3:-left}" >&3
-    sleep 0.2
-}
-press() {
-    printf 'move %s %s\npress left\n' "$1" "$2" >&3
-    sleep 0.2
-}
-release() {
-    printf 'move %s %s\nrelease left\n' "$1" "$2" >&3
-    sleep 0.2
-}
+signaled() { signals | grep -qxF -- "$1"; }
+click() { vpointer "move $1 $2" "click ${3:-left}"; }
+press() { vpointer "move $1 $2" "press left"; }
+release() { vpointer "move $1 $2" "release left"; }
 pw_node() {
     pw-dump | python3 -c "
 import json, sys
@@ -252,7 +292,6 @@ pw_set() {
     id=$(pw_node "$1" | cut -d' ' -f1)
     linear=$(python3 -c "print(($2 / 100) ** 3)")
     pw-cli set-param "$id" Props "{ channelVolumes: [ $linear, $linear ] }" >/dev/null
-    sleep 0.3
 }
 declare -A player_fds player_pids
 player_start() {
@@ -263,68 +302,88 @@ player_start() {
     exec {fd}>"$work/player-$1"
     player_fds[$1]=$fd
     wait_for busctl --user status "org.mpris.MediaPlayer2.$1"
-    sleep 0.3
 }
 player() {
     local name=$1
     shift
     echo "$*" >&"${player_fds[$name]}"
-    sleep 0.3
 }
 player_calls() { paste -sd' ' "$work/player-$1.calls"; }
 player_stop() {
     kill "${player_pids[$1]}"
-    sleep 0.3
+    wait_for sh -c "! busctl --user status org.mpris.MediaPlayer2.$1"
 }
 serve() {
     python3 -u -m http.server --bind 127.0.0.1 --directory "$1" 0 >"$work/http.log" 2>&1 &
     wait_for grep -q 'port' "$work/http.log"
     echo "http://127.0.0.1:$(sed -nE 's/.*port ([0-9]+).*/\1/p' "$work/http.log" | head -1)"
 }
-pointer() {
-    printf 'move %s %s\n' "$1" "$2" >&3
-    sleep 0.2
-}
-scroll() {
-    printf 'scroll %s\n' "$1" >&3
-    sleep 0.2
-}
+pointer() { vpointer "move $1 $2"; }
+scroll() { vpointer "scroll $1"; }
 screenshot() {
     if [[ $outputs == 1 ]]; then grim -o HEADLESS-1 "$1"; else grim "$1"; fi
+}
+# a screenshot once the screen is still: twice the same in a row
+still_screenshot() {
+    local prev="$work/still.png" deadline=$((SECONDS + WAIT))
+    screenshot "$prev"
+    while sleep 0.1; screenshot "$1"; ! cmp -s "$prev" "$1"; do
+        ((SECONDS < deadline)) || { echo "the screen does not stand still" >&2; return; }
+        mv "$1" "$prev"
+    done
+}
+# holds EXPR JSON: whether EXPR holds for a measurement
+holds() {
+    python3 -c '
+import json, sys
+m = json.load(open(sys.argv[2]))
+boxes, gaps, size = m["boxes"], m["gaps"], m["size"]
+sys.exit(0 if eval(sys.argv[1]) else 1)' "$1" "$2"
 }
 state() {
     durstctl info --json | python3 -c "import json,sys; print(json.load(sys.stdin)[sys.argv[1]])" "$1"
 }
-lock() { echo lock >&4; sleep 0.3; }
-unlock() { echo unlock >&4; sleep 0.3; }
+# black windows: black text (foot may print warnings into the window) and
+# a hidden cursor (unfocused, foot draws it hollow in white whatever its
+# color)
+printf '#!/bin/sh\nprintf "\\033[?25l"\nexec sleep 600\n' >"$work/blank"
+chmod +x "$work/blank"
+is_state() { [[ "$(state "$1")" == "$2" ]]; }
+# these return once durst has noticed (if it does at all)
+lock() { echo lock >&4; await True state locked >/dev/null; }
+unlock() { echo unlock >&4; await False state locked >/dev/null; }
 window_on() {
     local id="durst-w$RANDOM"
     swaymsg -q focus output "$1"
     swaymsg -q exec "foot --app-id $id -o colors-dark.background=000000 \
-        -o colors-dark.foreground=000000 -o colors-dark.cursor='000000 000000' sleep 600"
+        -o colors-dark.foreground=000000 -o tweak.font-monospace-warn=no $work/blank"
     wait_for sh -c "swaymsg -t get_tree | grep -q '\"app_id\": \"$id\"'"
-    sleep 0.5
+    wait_for is_state focused_output "$1"
 }
 fullscreen_window() {
     swaymsg -q exec "foot --app-id durst-test -o colors-dark.background=000000 \
-        -o colors-dark.foreground=000000 -o colors-dark.cursor='000000 000000' sleep 600"
+        -o colors-dark.foreground=000000 -o tweak.font-monospace-warn=no $work/blank"
     wait_for sh -c "swaymsg -t get_tree | grep -q '\"app_id\": \"durst-test\"'"
     swaymsg -q '[app_id=durst-test] fullscreen enable'
-    sleep 0.5
+    wait_for is_state fullscreen True
 }
 leave_fullscreen() {
     swaymsg -q '[app_id=durst-test] fullscreen disable'
-    sleep 0.3
+    wait_for is_state fullscreen False
     # gone, so it doesn't disturb the screenshot
     swaymsg -q '[app_id=durst-test] kill'
-    sleep 0.5
+    wait_for sh -c "! swaymsg -t get_tree | grep -q '\"app_id\": \"durst-test\"'"
 }
 last_png=""
 snap() {
-    sleep 0.3
+    local expr="${1:-True}" deadline=$((SECONDS + WAIT))
     last_png="$work/snap.png"
-    screenshot "$last_png"
-    python3 "$here/measure.py" "$last_png" >"$work/snap.json"
+    while still_screenshot "$last_png"
+        python3 "$here/measure.py" "$last_png" >"$work/snap.json"
+        ! holds "$expr" "$work/snap.json"; do
+        ((SECONDS < deadline)) || { echo "snap: gave up waiting for $expr" >&2; return; }
+        sleep 0.1
+    done
 }
 geom() {
     python3 -c "import json,sys; b=json.load(open('$work/snap.json'))['boxes'][int(sys.argv[1])]
@@ -349,14 +408,28 @@ EOF
 # shellcheck source=/dev/null
 source "$scenario"
 
-sleep "${SETTLE:-1}"
-screenshot "$out"
-last_png="$out"
 export MEASURE="${out%.png}.json"
-python3 "$here/measure.py" "$out" >"$MEASURE"
+final() {
+    still_screenshot "$out"
+    last_png="$out"
+    python3 "$here/measure.py" "$out" >"$MEASURE"
+}
+final
+if declare -F verify >/dev/null; then
+    # retried on a new screenshot; only the last attempt's output is shown
+    deadline=$((SECONDS + WAIT))
+    until verify >"$work/verify.out" 2>&1; do
+        if ((SECONDS >= deadline)); then
+            cat "$work/verify.out" "$MEASURE"
+            echo "screenshot: $out" >&2
+            echo "verify failed" >&2
+            KEEP_LOGS=1
+            exit 1
+        fi
+        sleep 0.2
+        final
+    done
+    cat "$work/verify.out"
+fi
 echo "screenshot: $out" >&2
 cat "$MEASURE"
-
-if declare -F verify >/dev/null; then
-    verify || { echo "verify failed" >&2; KEEP_LOGS=1; exit 1; }
-fi

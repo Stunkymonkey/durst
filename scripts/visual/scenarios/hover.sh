@@ -1,14 +1,14 @@
 # The timeout pauses while the pointer is over the notification.
-id=$(notify -t 1500 "Hover me")
+# 5 s: enough for a slow machine to see the notification before hovering.
+id=$(notify -t 5000 "Hover me")
 # a surface appearing under a resting pointer gets no enter event, so move
 # only once it is mapped
-sleep 0.5
+snap 'len(boxes) == 1'
 pointer 1000 40
-sleep 2.5
-snap
+sleep 6                     # longer than the timeout, but hovered
+snap 'len(boxes) == 1'
 hovered=$(python3 -c "import json;print(len(json.load(open('$DURST_TEST_DIR/snap.json'))['boxes']))")
 pointer 100 600
-sleep 1.5
 
 verify() {
     echo "boxes while hovered: $hovered"

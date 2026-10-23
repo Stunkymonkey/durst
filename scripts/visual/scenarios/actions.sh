@@ -5,11 +5,11 @@ b=$(send "Default only" "middle click me" '["default", "Open"]')
 c=$(send "Resident" "stays after the action" '["ok", "OK"]' '{"resident": <true>}')
 
 # the "No" button: right half of the button row at the bottom of box 0
-snap
+snap 'len(boxes) == 3'
 click "$(( $(geom 0 x) + $(geom 0 w) * 3 / 4 ))" "$(( $(geom 0 bottom) - 26 ))"
-snap
+snap 'len(boxes) == 2'
 click "$(( $(geom 0 x) + 100 ))" "$(( $(geom 0 y) + 20 ))" middle
-snap
+snap 'len(boxes) == 1'
 click "$(( $(geom 0 x) + $(geom 0 w) / 2 ))" "$(( $(geom 0 bottom) - 26 ))"
 
 verify() {

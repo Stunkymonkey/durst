@@ -2,20 +2,15 @@
 # (read back with pw-dump), the OSD shows at the bottom and fits its content.
 before=$(durstctl volume get)
 durstctl volume set 50 >/dev/null
-sleep 0.3
-set50=$(pw_volume test-sink)
+set50=$(await "50 False" pw_volume test-sink)
 durstctl volume up >/dev/null
-sleep 0.3
-up=$(pw_volume test-sink)
+up=$(await "55 False" pw_volume test-sink)
 durstctl volume set -15% >/dev/null
-sleep 0.3
-relative=$(pw_volume test-sink)
+relative=$(await "40 False" pw_volume test-sink)
 durstctl volume mute on >/dev/null
-sleep 0.3
-muted=$(pw_volume test-sink)
+muted=$(await "40 True" pw_volume test-sink)
 durstctl volume set 30 --mic >/dev/null
-sleep 0.3
-mic=$(pw_volume test-source)
+mic=$(await "30 False" pw_volume test-source)
 invalid=$(status durstctl volume set loud)
 get=$(durstctl volume get --mic --json | python3 -c "import json,sys; v=json.load(sys.stdin); print(v['percent'], v['muted'], v['description'])")
 

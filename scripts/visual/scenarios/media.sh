@@ -8,12 +8,12 @@ none=$(status durstctl media status)
 player_start test
 player test status Playing
 player test "track 1|First Song|First Artist|file://$DURST_TEST_DIR/red.png"
-first=$(durstctl media status --json | python3 -c "import json,sys; m=json.load(sys.stdin); print(m['player'], m['status'], m['title'], m['artist'], sep='|')")
-snap
-first_cover=$(pixel $(( $(geom 0 x) + 14 + 36 )) $(( $(geom 0 y) + 14 + 36 )))
+status_line() { durstctl media status --json | python3 -c "import json,sys; m=json.load(sys.stdin); print(m['player'], m['status'], m['title'], m['artist'], sep='|')"; }
+first=$(await "Fake test|playing|First Song|First Artist" status_line)
+cover() { snap 'len(boxes) == 1'; pixel $(( $(geom 0 x) + 14 + 36 )) $(( $(geom 0 y) + 14 + 36 )); }
+first_cover=$(await "255 0 0" cover)
 player test "track 2|Second Song|Second Artist|file://$DURST_TEST_DIR/green.png"
-snap
-second_cover=$(pixel $(( $(geom 0 x) + 14 + 36 )) $(( $(geom 0 y) + 14 + 36 )))
+second_cover=$(await "0 255 0" cover)
 # the three buttons: runs of the button color in their row
 read -r prev_x play_x next_x < <(python3 - "$DURST_TEST_DIR/snap.png" "$DURST_TEST_DIR/snap.json" <<'PY'
 import json, sys
@@ -34,12 +34,17 @@ print(*runs)
 PY
 )
 button_y=$(( $(geom 0 bottom) - 14 - 10 ))
+# one after the other, as by hand: durst takes the clicks of a frame at the
+# pointer's last position
 click "$next_x" "$button_y"
+await "Next" player_calls test >/dev/null
 click "$play_x" "$button_y"
+await "Next PlayPause" player_calls test >/dev/null
 click "$prev_x" "$button_y"
+await "Next PlayPause Previous" player_calls test >/dev/null
 durstctl media next
 durstctl media toggle
-calls=$(player_calls test)
+calls=$(await "Next PlayPause Previous Next PlayPause" player_calls test)
 
 verify() {
     echo "none=$none first=$first covers=$first_cover/$second_cover buttons=$prev_x,$play_x,$next_x calls=$calls"

@@ -4,7 +4,7 @@ expired=$(notify -t 300 "Expired")
 dismissed=$(notify "Dismissed")
 transient=$(notify -h boolean:transient:true "Transient")
 app=$(notify "Closed by the app")
-sleep 0.6
+wait_for signaled "NotificationClosed $expired 1"
 durstctl notif close "$dismissed"
 durstctl notif close "$transient"
 gdbus call --session --dest org.freedesktop.Notifications \

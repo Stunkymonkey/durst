@@ -8,7 +8,7 @@ notify "Delayed" >/dev/null
 notify "Shown" >/dev/null
 during=$(durstctl notif count)
 # drawn above the fullscreen window: the top border of the only box
-snap
+snap 'len(boxes) == 1'
 border=$(pixel 1070 21)
 held=$(durstctl notif count --held)
 body=$(durstctl notif list --json | python3 -c "import json,sys; print([n['body'] for n in json.load(sys.stdin) if n['summary']=='Shown'][0])")

@@ -22,17 +22,14 @@ print(walk(json.load(sys.stdin)))'; }
 before=$(urgent)
 
 id=$(send "Open me" "the app should come to the front" '["open", "Open"]' '{"desktop-entry": <"durst-app">}')
-sleep 0.3
-snap
+snap 'len(boxes) == 1'
 click "$(( $(geom -1 x) + $(geom -1 w) / 2 ))" "$(( $(geom -1 bottom) - 26 ))"
-for _ in $(seq 20); do signals | grep -q "^ActionInvoked $id " && break; sleep 0.1; done
+wait_for signaled "ActionInvoked $id \"open\""
 token=$(signals | sed -nE "s/^ActivationToken $id \"(.*)\"$/\1/p")
 echo "$token" >&5
-sleep 0.5
-after=$(urgent)
+after=$(await True urgent)
 # the screenshot only needs the notifications gone
 swaymsg -q '[app_id=durst-app] kill'; swaymsg -q '[app_id="^durst-w"] kill'
-sleep 0.3
 
 verify() {
     signals

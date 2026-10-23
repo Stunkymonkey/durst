@@ -6,7 +6,7 @@ mkdir -p "$DURST_TEST_DIR/share/sounds/freedesktop/stereo"
 touch "$DURST_TEST_DIR/share/sounds/freedesktop/stereo/durst-test.oga"
 
 scripted=$(send "Scripted" "a body" '["ok", "OK"]')
-sleep 0.2
+wait_for test -s "$DURST_TEST_DIR/receive.env"
 durstctl notif action "$scripted" ok
 notify -h string:sound-name:durst-test-new-instant "Hinted" >/dev/null
 notify -h string:sound-name:durst-test -h boolean:suppress-sound:true "Suppressed" >/dev/null

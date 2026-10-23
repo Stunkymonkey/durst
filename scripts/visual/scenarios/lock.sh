@@ -3,11 +3,10 @@ id=$(notify -t 1500 "Locked")
 lock
 locked=$(state locked)
 sleep 2.5
-snap
+snap 'len(boxes) == 1'
 while_locked=$(python3 -c "import json;print(len(json.load(open('$DURST_TEST_DIR/snap.json'))['boxes']))")
 unlock
 unlocked=$(state locked)
-sleep 2
 
 verify() {
     echo "locked=$locked boxes_while_locked=$while_locked unlocked=$unlocked"

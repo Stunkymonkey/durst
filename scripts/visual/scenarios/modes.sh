@@ -3,7 +3,7 @@
 durstctl mode enable dnd >/dev/null
 held_id=$(notify "Normal during dnd")
 notify -u critical "Critical during dnd" >/dev/null
-snap
+snap 'len(boxes) == 1'
 during=$(python3 -c "import json;print(len(json.load(open('$DURST_TEST_DIR/snap.json'))['boxes']))")
 held=$(durstctl notif count --held)
 states=$(durstctl notif list --json | python3 -c "import json,sys; print(*sorted(n['state'] for n in json.load(sys.stdin)))")

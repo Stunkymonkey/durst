@@ -4,7 +4,7 @@
 notify "Everywhere" >/dev/null
 second=$(notify "Second")
 outputs=$(state outputs)
-snap
+snap 'len(boxes) == 4'
 before=$(python3 -c "import json;print(len(json.load(open('$DURST_TEST_DIR/snap.json'))['boxes']))")
 # the second notification's copy on HEADLESS-2
 click $(( 1280 + 1000 )) $(( 20 + 47 + 8 + 20 ))

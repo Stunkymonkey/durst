@@ -4,16 +4,25 @@
 # write is one reload, and reading the file doesn't count as a change (that
 # was an endless reload loop).
 config="$XDG_CONFIG_HOME/durst/config.toml"
-write() { printf "$1" >"$config.tmp" && mv "$config.tmp" "$config"; sleep 1; }
+reloads() { grep -c 'config file changed' "$log/durst.log" || true; }
+reloaded() { (( $(reloads) >= $1 )); }
+# each write returns once durst has reloaded
+write() {
+    local n
+    n=$(( $(reloads) + 1 ))
+    printf "$1" >"$config.tmp" && mv "$config.tmp" "$config"
+    wait_for reloaded "$n"
+}
+apps() { durstctl notif list --json | python3 -c "import json,sys; print(sorted(n['app_name'] for n in json.load(sys.stdin)))"; }
 notify "Hot reload" >/dev/null
 write '[general]\nwidth = 300\n'
-snap
+snap 'len(boxes) == 1 and boxes[0]["w"] == 300'
 narrow=$(geom 0 w)
 write '[general]\nwidth = 200\nbogus = 1\n'
-broken=$(durstctl notif list --json | python3 -c "import json,sys; print(sorted(n['app_name'] for n in json.load(sys.stdin)))")
+broken=$(await "['durst', 'notify-send']" apps)
 write '[general]\nwidth = 250\n'
 durstctl notif list >/dev/null
-sleep 2
+sleep 2   # no reload of its own after reading the file
 reloads=$(grep -c 'config file changed' "$log/durst.log")
 
 verify() {

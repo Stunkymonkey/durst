@@ -4,7 +4,7 @@ notify -a hinted -h string:bgcolor:#ff0000 -h string:frcolor:#00ff00 \
     -h string:hlcolor:#ffff00 -h int:value:100 "Hinted" >/dev/null
 notify -a ruled -h string:bgcolor:#ff0000 "Ruled" >/dev/null
 notify -a invalid -h string:bgcolor:red "Invalid" >/dev/null
-snap
+snap 'len(boxes) == 3'
 inside() { pixel "$(( $(geom "$1" right) - 20 ))" "$(( $(geom "$1" y) + 8 ))"; }
 hinted=$(inside 0)
 frame=$(pixel "$(( $(geom 0 x) + 50 ))" "$(geom 0 y)")

@@ -1,11 +1,12 @@
 # The OSD with the mouse: clicking the slider sets the volume there,
 # dragging it too (throttled), scrolling steps it, the button mutes, and it
-# stays while hovered.
+# stays while hovered. The OSD's timeout (volume-mouse.toml) leaves a slow
+# machine time to measure it before the pointer is on it.
 durstctl osd show volume
 # the slider's rail: the longest stretch of rail colors inside the box (not
 # the border, which has the same blue); at 100 % it is all blue
 rail() {
-    snap
+    snap 'len(boxes) == 1'
     read -r left right row < <(python3 - "$DURST_TEST_DIR/snap.png" "$DURST_TEST_DIR/snap.json" <<'PY'
 import json, sys
 from PIL import Image
@@ -36,16 +37,14 @@ PY
 rail
 first_rail="$left..$right"
 click $(( left + (right - left) / 4 )) "$row"
-sleep 0.3
-clicked=$(pw_volume test-sink)
+clicked=$(await_match "2[3-7] False" pw_volume test-sink)
+read -r c _ <<<"$clicked"
 pointer $(( left + 5 )) $(( row - 20 ))
 scroll 10
-sleep 0.3
-scrolled=$(pw_volume test-sink)
+scrolled=$(await "$(( c - 5 )) False" pw_volume test-sink)
 # the mute button: right end of the control row
 click $(( $(geom 0 right) - 14 - 15 )) "$row"
-sleep 0.3
-muted=$(pw_volume test-sink)
+muted=$(await "$(( c - 5 )) True" pw_volume test-sink)
 # the slider keeps its size when muted (the button has a fixed width)
 rail
 muted_rail="$left..$right"
@@ -53,14 +52,12 @@ muted_rail="$left..$right"
 press $(( left + (right - left) / 2 )) "$row"
 for f in 55 60 65 70 75; do pointer $(( left + (right - left) * f / 100 )) "$row"; done
 release $(( left + (right - left) * 3 / 4 )) "$row"
-sleep 0.3
-dragged=$(pw_volume test-sink)
+dragged=$(await_match "7[3-7] (True|False)" pw_volume test-sink)
 pointer $(( left + 5 )) $(( row - 20 ))
-sleep 3                      # longer than the 2 s timeout, but hovered
-snap
+sleep 7                      # longer than the 6 s timeout, but hovered
+snap 'len(boxes) == 1'
 hovered=$(python3 -c "import json;print(len(json.load(open('$DURST_TEST_DIR/snap.json'))['boxes']))")
 pointer 10 10
-sleep 2.5
 
 verify() {
     echo "rail=$first_rail muted_rail=$muted_rail @$row clicked=$clicked scrolled=$scrolled muted=$muted dragged=$dragged hovered=$hovered"

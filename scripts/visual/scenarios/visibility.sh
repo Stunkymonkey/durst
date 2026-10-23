@@ -5,10 +5,11 @@ durstctl notif close "$nohist"
 quick=$(notify -t 0 "Quick")
 auto=$(send "Auto" "" '["go", "Go"]')
 middle=$(send "Middle" "" '["first", "First", "second", "Second"]')
-sleep 0.6
-snap
+# only "Middle" is left once "Quick" has expired
+snap 'len(boxes) == 1'
 click "$(( $(geom 0 x) + 100 ))" "$(( $(geom 0 y) + 20 ))" middle
-history=$(durstctl history list --json | python3 -c "import json,sys; print(*sorted(n['id'] for n in json.load(sys.stdin)))")
+history_ids() { durstctl history list --json | python3 -c "import json,sys; print(*sorted(n['id'] for n in json.load(sys.stdin)))"; }
+history=$(await "$(printf '%s\n' "$skipped" "$quick" "$auto" "$middle" | sort -n | paste -sd' ')" history_ids)
 
 verify() {
     echo "history=[$history]"

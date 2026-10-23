@@ -1,12 +1,12 @@
 # Timeouts pause while the user is idle (ext-idle-notify) and resume on input.
 id=$(notify -t 2500 "Idle")
 sleep 2                     # idle since t=1s: paused with ~1.5s left
-idle_state=$(state idle)
+idle_state=$(await True state idle)
 sleep 2                     # would have expired at t=2.5s without the pause
-snap
+snap 'len(boxes) == 1'
 while_idle=$(python3 -c "import json;print(len(json.load(open('$DURST_TEST_DIR/snap.json'))['boxes']))")
 pointer 100 600             # input: active again, the timer resumes
-active_state=$(state idle)
+active_state=$(await False state idle)
 # stay active (the threshold is 1s) until the remaining ~1.5s are over
 for i in 1 2 3 4 5; do pointer $((100 + i)) 600; sleep 0.3; done
 

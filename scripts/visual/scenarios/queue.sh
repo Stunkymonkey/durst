@@ -4,7 +4,7 @@ first=$(notify "One")
 notify "Two" >/dev/null
 notify "Three" >/dev/null
 notify "Four" >/dev/null
-snap
+snap 'len(boxes) == 3'
 echo "before: $(cat "$DURST_TEST_DIR/snap.json")"
 [[ $(python3 -c "import json;print(len(json.load(open('$DURST_TEST_DIR/snap.json'))['boxes']))") == 3 ]] || echo "FAIL: expected 3 boxes before"
 click 1000 40

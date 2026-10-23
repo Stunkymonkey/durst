@@ -188,6 +188,12 @@ software renderer (`ICED_BACKEND=tiny-skia`), so pixels are deterministic.
 `REPEAT=N scripts/visual/run-all.sh` runs every scenario N times, to catch
 races.
 
+Scenarios don't sleep to give durst time: they wait for what they expect
+(`await`, `wait_for`, `snap EXPR`), and `verify` is retried until it passes.
+Each wait gives up after `WAIT` seconds (default 10), so a slow machine is
+only slower, not flaky. A `sleep` in a scenario is for time that has to pass,
+such as a timeout.
+
 ### other compositors
 
 The visual tests run on sway only. `nix/vm-test.nix` checks the basics on

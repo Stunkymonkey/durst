@@ -10,14 +10,15 @@ player a "track 1|Song A|Artist A|"
 player a status Playing
 player_start b
 player b "track 2|Song B|Artist B|"
-first=$(durstctl media status --json | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
+title() { durstctl media status --json | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])"; }
+first=$(await "Song A" title)
 player b status Playing
-second=$(durstctl media status --json | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
+second=$(await "Song B" title)
 durstctl media next
 player b status Paused
-third=$(durstctl media status --json | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
+third=$(await "Song A" title)
 player_stop a
-fourth=$(durstctl media status --json | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
+fourth=$(await "Song B" title)
 
 verify() {
     echo "proxy=$proxy first=$first second=$second third=$third fourth=$fourth calls a=[$(player_calls a)] b=[$(player_calls b)]"

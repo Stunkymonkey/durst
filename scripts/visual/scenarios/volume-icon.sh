@@ -12,15 +12,15 @@ icon audio-volume-muted '(0, 255, 0)'
 icon microphone-sensitivity-medium '(0, 0, 255)'
 
 # the icon's center: inset 14, icon 48
-center() { snap; pixel "$(( $(geom 0 x) + 14 + 24 ))" "$(( $(geom 0 y) + $(geom 0 h) / 2 ))"; }
+center() { snap 'len(boxes) == 1'; pixel "$(( $(geom 0 x) + 14 + 24 ))" "$(( $(geom 0 y) + $(geom 0 h) / 2 ))"; }
 durstctl volume set 100 >/dev/null
-high=$(center)
+high=$(await "255 0 0" center)
 durstctl volume set 20 >/dev/null
-low=$(center)
+low=$(await "255 255 0" center)
 durstctl volume mute on >/dev/null
-muted=$(center)
+muted=$(await "0 255 0" center)
 durstctl volume set 50 --mic >/dev/null
-mic=$(center)
+mic=$(await "0 0 255" center)
 
 verify() {
     echo "high: $high, low: $low, muted: $muted, mic: $mic"
