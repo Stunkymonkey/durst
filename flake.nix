@@ -2,6 +2,8 @@
   inputs = {
     flake-utils.url = "github:numtide/flake-utils";
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    git-hooks.url = "github:cachix/git-hooks.nix";
+    git-hooks.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -9,6 +11,7 @@
       self,
       nixpkgs,
       flake-utils,
+      git-hooks,
       ...
     }:
     flake-utils.lib.eachDefaultSystem (
@@ -38,6 +41,21 @@
         # the only fonts durst sees in scripts/visual: the same text sizes on
         # every machine
         visualTestFonts = "${dejavu_fonts}/share/fonts";
+        # installed into .git/hooks by the dev shell; clippy stays in CI, it
+        # would build the whole workspace on every commit
+        preCommit = git-hooks.lib.${system}.run {
+          src = ./.;
+          hooks = {
+            convco.enable = true;
+            rustfmt.enable = true;
+            nixfmt.enable = true;
+            check-merge-conflicts.enable = true;
+            check-toml.enable = true;
+            check-yaml.enable = true;
+            end-of-file-fixer.enable = true;
+            trim-trailing-whitespace.enable = true;
+          };
+        };
       in
       rec {
         packages.default = rustPlatform.buildRustPackage {
@@ -135,6 +153,9 @@
         # with HiDPI scales: nix build .#checks.x86_64-linux.vm-hyprland -L
         checks = lib.optionalAttrs stdenv.hostPlatform.isLinux (
           {
+            # the pre-commit hooks on all files: nix build .#checks.x86_64-linux.pre-commit -L
+            pre-commit = preCommit;
+
             # scripts/visual in the build sandbox, with the package as
             # installed: nix build .#checks.x86_64-linux.visual -L
             # (the screenshots end up in the result)
@@ -235,7 +256,9 @@
             cargo-fuzz
             rustPlatform.bindgenHook
           ]
-          ++ visualTestTools;
+          ++ visualTestTools
+          ++ preCommit.enabledPackages;
+          shellHook = preCommit.shellHook;
           buildInputs = runtimeLibs ++ [ pipewire ];
           LD_LIBRARY_PATH = "${lib.makeLibraryPath buildInputs}";
           DURST_TEST_FONTS = visualTestFonts;

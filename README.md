@@ -161,6 +161,11 @@ scripts/notify-test.sh       # manual battery of notifications against any runni
 nix build                    # the package, as installed
 ```
 
+The dev shell installs git hooks: commit messages have to follow
+[Conventional Commits](https://www.conventionalcommits.org) (convco), and
+rustfmt, nixfmt and a few file checks run on the staged files. On all files:
+`nix build .#checks.x86_64-linux.pre-commit -L`.
+
 ### visual tests
 
 `scripts/visual/run.sh <scenario>` starts durst inside an isolated headless sway
