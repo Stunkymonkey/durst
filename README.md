@@ -18,6 +18,8 @@ media player. [PLAN.md](PLAN.md) has the design and the roadmap.
   mute; shown on `durstctl volume ...` and when other programs change it
 - a media OSD (MPRIS): cover, title, artist, previous / play-pause / next;
   shown when the song changes and on `durstctl media ...`
+- the OSD buttons show the icon theme's (symbolic) icons in the text color,
+  or text labels if the theme has none
 
 Wayland only; the compositor needs wlr-layer-shell (sway, Hyprland, niri,
 river, labwc, ...).

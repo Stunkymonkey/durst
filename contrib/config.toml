@@ -22,7 +22,8 @@ stack_duplicates = true
 output = "focused"
 # command to open links, the URL is appended
 browser = ["xdg-open"]
-# icon theme for icon names; default: gtk-icon-theme-name from GTK's settings.ini
+# icon theme for icon names, also of the OSD buttons (text labels where it
+# has no icons for them); default: gtk-icon-theme-name from GTK's settings.ini
 # icon_theme = "Adwaita"
 # use the urgency's timeout even if the sender asks for another one
 ignore_dbus_timeout = false

@@ -1,11 +1,14 @@
-//! The volume OSD: icon, device name, slider, percent, mute button.
+//! The volume OSD: icon, device name, slider, percent, mute button; and the
+//! media OSD: cover, title, artist, previous / play-pause / next.
 //!
-//! Like notifications it is a layer surface whose height is predicted, so
-//! `volume_height` mirrors `volume_view`.
+//! Like notifications they are layer surfaces whose height is predicted, so
+//! `volume_height` mirrors `volume_view` (and `media_height` `media_view`).
+//! The buttons show the icon theme's icons, each as tall as a line of text,
+//! so their height is the same with icons and with text labels.
 
 use iced::advanced::text::{LineHeight, Wrapping};
 use iced::alignment::{Horizontal, Vertical};
-use iced::widget::{button, column, container, image, mouse_area, row, slider, text};
+use iced::widget::{button, column, container, image, mouse_area, row, slider, svg, text};
 use iced::{Element, Length, mouse};
 
 use super::icons::Icon;
@@ -37,6 +40,9 @@ pub struct VolumeContent<'a> {
     pub max: u32,
     /// from the icon theme, see [`volume_icon_name`]
     pub icon: Option<&'a Icon>,
+    /// the mute button's icon for the current state, see [`mute_icon_name`];
+    /// `None`: a text label
+    pub mute_icon: Option<&'a Icon>,
 }
 
 /// The icon theme's name for a volume level (freedesktop naming spec).
@@ -64,6 +70,57 @@ pub fn volume_icon_name(mic: bool, percent: u32, muted: bool) -> &'static str {
         ]
     };
     names[level]
+}
+
+/// The mute button's icon: what the device is now, muted or not.
+pub fn mute_icon_name(mic: bool, muted: bool) -> &'static str {
+    match (mic, muted) {
+        (false, false) => "audio-volume-high",
+        (false, true) => "audio-volume-muted",
+        (true, false) => "microphone-sensitivity-high",
+        (true, true) => "microphone-sensitivity-muted",
+    }
+}
+
+/// The icon theme's names for the media buttons (freedesktop naming spec).
+pub const MEDIA_PREVIOUS: &str = "media-skip-backward";
+pub const MEDIA_PLAY: &str = "media-playback-start";
+pub const MEDIA_PAUSE: &str = "media-playback-pause";
+pub const MEDIA_NEXT: &str = "media-skip-forward";
+
+/// The height of a button's content: a line of its text, or an icon.
+fn button_line(style: &Style) -> f32 {
+    text_height("Play", body_font(style), style, f32::INFINITY)
+}
+
+/// The size to load button icons at, in logical pixels.
+pub fn button_icon_size(style: &Style) -> u32 {
+    button_line(style).floor() as u32
+}
+
+/// A button with an icon is as wide as two lines of text are tall.
+fn icon_button_width(style: &Style) -> f32 {
+    (2.0 * button_line(style) + 2.0 * style.action.padding as f32).ceil()
+}
+
+/// A button's icon, centered in a line's height; a symbolic SVG takes the
+/// button's text color, as its text would.
+fn button_icon<'a, E: 'a>(icon: &'a Icon, style: &Style) -> Element<'a, E> {
+    let content = match icon {
+        Icon::Svg { path, .. } => {
+            let color = style.action.foreground;
+            svg(svg::Handle::from_path(path))
+                .width(icon.width() as f32)
+                .height(icon.height() as f32)
+                .style(move |_, _| svg::Style { color: Some(color) })
+                .into()
+        }
+        Icon::Raster { .. } => icon_view(icon),
+    };
+    container(content)
+        .center_x(Length::Fill)
+        .center_y(button_line(style))
+        .into()
 }
 
 fn percent_label(c: &VolumeContent) -> String {
@@ -131,25 +188,31 @@ pub fn volume_view<'a>(c: VolumeContent<'a>, style: &'a Style) -> Element<'a, Ev
             },
         });
     let action = style.action.clone();
-    let mute = button(
-        label(mute_label(&c).into(), body_font(style))
-            .align_x(Horizontal::Center)
-            .width(Length::Fill),
-    )
-    .width(mute_width(style))
-    .padding(action.padding as f32)
-    .on_press(Event::ToggleMute)
-    .style(move |_, status| button::Style {
-        background: Some(match status {
-            button::Status::Hovered | button::Status::Pressed => {
-                action.background.scale_alpha(0.7).into()
-            }
-            _ => action.background.into(),
-        }),
-        text_color: action.foreground,
-        border: iced::Border::default().rounded(action.radius),
-        ..Default::default()
-    });
+    let (mute_content, mute_width) = match c.mute_icon {
+        Some(icon) => (button_icon(icon, style), icon_button_width(style)),
+        None => (
+            label(mute_label(&c).into(), body_font(style))
+                .align_x(Horizontal::Center)
+                .width(Length::Fill)
+                .into(),
+            mute_width(style),
+        ),
+    };
+    let mute = button(mute_content)
+        .width(mute_width)
+        .padding(action.padding as f32)
+        .on_press(Event::ToggleMute)
+        .style(move |_, status| button::Style {
+            background: Some(match status {
+                button::Status::Hovered | button::Status::Pressed => {
+                    action.background.scale_alpha(0.7).into()
+                }
+                _ => action.background.into(),
+            }),
+            text_color: action.foreground,
+            border: iced::Border::default().rounded(action.radius),
+            ..Default::default()
+        });
     let controls = row![
         volume_slider,
         label(percent_label(&c), body_font(style))
@@ -198,6 +261,15 @@ pub struct MediaContent<'a> {
     /// `None`: no cover, or not loaded yet; a placeholder keeps the place
     pub cover: Option<&'a image::Handle>,
     pub cover_size: u32,
+    /// `None`: text labels
+    pub icons: Option<MediaIcons<'a>>,
+}
+
+/// The media buttons' icons; the play-pause one for the current status.
+pub struct MediaIcons<'a> {
+    pub previous: &'a Icon,
+    pub play_pause: &'a Icon,
+    pub next: &'a Icon,
 }
 
 const MEDIA_LABELS: [&str; 4] = ["Previous", "Play", "Pause", "Next"];
@@ -219,7 +291,7 @@ pub fn media_height(c: &MediaContent, style: &Style) -> u32 {
     if !c.artist.is_empty() {
         info += spacing + line(c.artist, body_font(style));
     }
-    info += spacing + line("Play", body_font(style)) + 2.0 * style.action.padding as f32;
+    info += spacing + button_line(style) + 2.0 * style.action.padding as f32;
     (info.max(c.cover_size as f32) + 2.0 * inset(style) as f32).ceil() as u32
 }
 
@@ -248,37 +320,45 @@ pub fn media_view<'a>(c: MediaContent<'a>, style: &'a Style) -> Element<'a, Medi
                 .into()
         }
     };
-    let width = media_button_width(style);
-    let action = style.action.clone();
-    let media_button = |content: &'static str, event: MediaEvent| {
-        let action = action.clone();
-        button(
-            label(content, body_font(style))
-                .align_x(Horizontal::Center)
-                .width(Length::Fill),
-        )
-        .width(width)
-        .padding(action.padding as f32)
-        .on_press(event)
-        .style(move |_, status| button::Style {
-            background: Some(match status {
-                button::Status::Hovered | button::Status::Pressed => {
-                    action.background.scale_alpha(0.7).into()
-                }
-                _ => action.background.into(),
-            }),
-            text_color: action.foreground,
-            border: iced::Border::default().rounded(action.radius),
-            ..Default::default()
-        })
+    let width = match c.icons {
+        Some(_) => icon_button_width(style),
+        None => media_button_width(style),
     };
+    let action = style.action.clone();
+    let media_button = |text_label: &'static str, icon: Option<&'a Icon>, event: MediaEvent| {
+        let action = action.clone();
+        let content = match icon {
+            Some(icon) => button_icon(icon, style),
+            None => label(text_label, body_font(style))
+                .align_x(Horizontal::Center)
+                .width(Length::Fill)
+                .into(),
+        };
+        button(content)
+            .width(width)
+            .padding(action.padding as f32)
+            .on_press(event)
+            .style(move |_, status| button::Style {
+                background: Some(match status {
+                    button::Status::Hovered | button::Status::Pressed => {
+                        action.background.scale_alpha(0.7).into()
+                    }
+                    _ => action.background.into(),
+                }),
+                text_color: action.foreground,
+                border: iced::Border::default().rounded(action.radius),
+                ..Default::default()
+            })
+    };
+    let icons = c.icons.as_ref();
     let buttons = row![
-        media_button("Previous", MediaEvent::Previous),
+        media_button("Previous", icons.map(|i| i.previous), MediaEvent::Previous),
         media_button(
             if c.playing { "Pause" } else { "Play" },
+            icons.map(|i| i.play_pause),
             MediaEvent::PlayPause
         ),
-        media_button("Next", MediaEvent::Next),
+        media_button("Next", icons.map(|i| i.next), MediaEvent::Next),
     ]
     .spacing(style.spacing);
     let mut info =
@@ -317,5 +397,12 @@ mod tests {
             volume_icon_name(true, 50, false),
             "microphone-sensitivity-medium"
         );
+    }
+
+    #[test]
+    fn mute_icon_shows_the_state() {
+        assert_eq!(mute_icon_name(false, false), "audio-volume-high");
+        assert_eq!(mute_icon_name(false, true), "audio-volume-muted");
+        assert_eq!(mute_icon_name(true, true), "microphone-sensitivity-muted");
     }
 }

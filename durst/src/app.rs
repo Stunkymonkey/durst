@@ -200,6 +200,8 @@ pub struct App {
     /// volume OSD icons by theme name (`None`: not in the theme), loaded in
     /// `sync` before the view needs them
     osd_icons: HashMap<&'static str, Option<Icon>>,
+    /// the same for the OSDs' buttons, which are smaller
+    button_icons: HashMap<&'static str, Option<Icon>>,
     /// state shared with the control interface, and the last published one
     status: Option<Arc<Mutex<Status>>>,
     published: Status,
@@ -266,6 +268,7 @@ impl App {
             signals: None,
             activator: None,
             osd_icons: HashMap::new(),
+            button_icons: HashMap::new(),
             status: None,
             published: Status::default(),
             prepared: HashMap::new(),
@@ -371,6 +374,7 @@ impl App {
                 if rescaled {
                     // images are kept at the output's scale: load them again
                     self.osd_icons.clear();
+                    self.button_icons.clear();
                     self.covers.clear();
                     tasks.push(self.reevaluate());
                 }
@@ -968,6 +972,7 @@ impl App {
     /// Opens, moves, resizes and closes surfaces to match the store.
     fn sync(&mut self, now: Instant) -> Task<Message> {
         self.load_osd_icon();
+        self.load_button_icons();
         let general = &self.config.general.clone();
         self.store
             .update_timers(general, now, self.idle || self.locked);
@@ -1426,6 +1431,24 @@ impl App {
                 .and_then(|url| self.covers.get(url))
                 .and_then(Option::as_ref),
             cover_size: self.config.osd.media.cover_size,
+            icons: match (
+                self.button_icon(osd::MEDIA_PREVIOUS),
+                self.button_icon(osd::MEDIA_PLAY),
+                self.button_icon(osd::MEDIA_PAUSE),
+                self.button_icon(osd::MEDIA_NEXT),
+            ) {
+                (Some(previous), Some(play), Some(pause), Some(next)) => Some(osd::MediaIcons {
+                    previous,
+                    play_pause: if player.status == PlayStatus::Playing {
+                        pause
+                    } else {
+                        play
+                    },
+                    next,
+                }),
+                // all icons or none: no button with text next to icons
+                _ => None,
+            },
         })
     }
 
@@ -1481,6 +1504,7 @@ impl App {
         let state = self.osd.as_ref()?;
         let volume = self.volumes.get(&state.target)?.as_ref()?;
         let percent = state.drag.unwrap_or(volume.percent);
+        let mic = state.target == Target::Source;
         Some(osd::VolumeContent {
             title: &volume.description,
             percent,
@@ -1490,7 +1514,52 @@ impl App {
                 .osd_icons
                 .get(self.osd_icon_name()?)
                 .and_then(Option::as_ref),
+            // both states' icons, or a text label
+            mute_icon: match (
+                self.button_icon(osd::mute_icon_name(mic, false)),
+                self.button_icon(osd::mute_icon_name(mic, true)),
+            ) {
+                (Some(unmuted), Some(muted)) => Some(if volume.muted { muted } else { unmuted }),
+                _ => None,
+            },
         })
+    }
+
+    /// A button icon loaded by `load_button_icons`.
+    fn button_icon(&self, name: &str) -> Option<&Icon> {
+        self.button_icons.get(name).and_then(Option::as_ref)
+    }
+
+    /// Loads the icons of the shown OSDs' buttons from the icon theme, the
+    /// symbolic variant if there is one: it takes the button's text color.
+    fn load_button_icons(&mut self) {
+        let mut names = vec![];
+        if let Some(state) = &self.osd {
+            let mic = state.target == Target::Source;
+            names.extend([false, true].map(|muted| osd::mute_icon_name(mic, muted)));
+        }
+        if self.media_osd.is_some() {
+            names.extend([
+                osd::MEDIA_PREVIOUS,
+                osd::MEDIA_PLAY,
+                osd::MEDIA_PAUSE,
+                osd::MEDIA_NEXT,
+            ]);
+        }
+        let style = self.config.style(Urgency::Normal);
+        let sizes = icons::Sizes::fixed(osd::button_icon_size(style)).at(self.focused_scale());
+        let theme = self.config.general.icon_theme.as_deref();
+        for name in names {
+            if self.button_icons.contains_key(name) {
+                continue;
+            }
+            let icon = icons::resolve_name(&format!("{name}-symbolic"), sizes, theme)
+                .or_else(|| icons::resolve_name(name, sizes, theme));
+            if icon.is_none() {
+                log::debug!("no button icon {name} in the icon theme");
+            }
+            self.button_icons.insert(name, icon);
+        }
     }
 
     /// The icon the volume OSD shows now, if it is shown.
@@ -1682,6 +1751,7 @@ impl App {
         log::info!("config reloaded");
         self.config = config;
         self.osd_icons.clear();
+        self.button_icons.clear();
         self.history.set_capacity(self.config.history.length);
         let reevaluate = self.reevaluate();
         let keys: Vec<SurfaceKey> = self.surfaces.keys().cloned().collect();
