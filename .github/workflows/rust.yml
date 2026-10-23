@@ -14,12 +14,11 @@ jobs:
         run: nix develop -c cargo clippy --all-targets -- -D warnings
       - name: test
         run: nix develop -c cargo test
-      - name: visual
-        run: nix develop -c scripts/visual/run-all.sh
       - name: package
         run: nix build -L
+      - name: visual
+        run: nix build .#checks.x86_64-linux.visual -L -o visual
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: visual
-          path: target/visual/
+          path: visual/

@@ -25,6 +25,19 @@
           vulkan-loader
           wayland
         ];
+        # what scripts/visual runs besides durst (pipewire: a private
+        # instance for the volume tests)
+        visualTestTools = [
+          sway
+          grim
+          foot
+          libnotify
+          pipewire
+          (python3.withPackages (ps: [ ps.pillow ]))
+        ];
+        # the only fonts durst sees in scripts/visual: the same text sizes on
+        # every machine
+        visualTestFonts = "${dejavu_fonts}/share/fonts";
       in
       rec {
         packages.default = rustPlatform.buildRustPackage {
@@ -99,10 +112,71 @@
           };
         };
 
+        # the fakes scripts/visual runs durst against; not installed with it
+        packages.test-tools = rustPlatform.buildRustPackage {
+          pname = "durst-test-tools";
+          inherit (packages.default) version src cargoDeps;
+          cargoBuildFlags = [
+            "-p"
+            "vpointer"
+            "-p"
+            "fake-logind"
+            "-p"
+            "fake-player"
+            "-p"
+            "fake-window"
+          ];
+          doCheck = false;
+          nativeBuildInputs = [ pkg-config ];
+          buildInputs = runtimeLibs;
+        };
+
         # durst on other compositors, each in a NixOS VM (needs KVM), also
         # with HiDPI scales: nix build .#checks.x86_64-linux.vm-hyprland -L
         checks = lib.optionalAttrs stdenv.hostPlatform.isLinux (
-          lib.listToAttrs (
+          {
+            # scripts/visual in the build sandbox, with the package as
+            # installed: nix build .#checks.x86_64-linux.visual -L
+            # (the screenshots end up in the result)
+            visual =
+              runCommand "durst-visual-tests"
+                {
+                  src = lib.fileset.toSource {
+                    root = ./.;
+                    fileset = lib.fileset.unions [
+                      ./scripts/visual
+                      ./contrib/dbus
+                    ];
+                  };
+                  nativeBuildInputs = visualTestTools ++ [
+                    dbus
+                    glib.bin # gdbus
+                    systemdMinimal # busctl
+                  ];
+                  DURST_BIN_DIR = "${
+                    symlinkJoin {
+                      name = "durst-test-bin";
+                      paths = [
+                        packages.default
+                        packages.test-tools
+                      ];
+                    }
+                  }/bin";
+                  DURST_TEST_FONTS = visualTestFonts;
+                  LD_LIBRARY_PATH = lib.makeLibraryPath (runtimeLibs ++ [ pipewire ]);
+                  # a loaded build machine is slow; only failures wait that long
+                  WAIT = 30;
+                }
+                ''
+                  cp -r $src/. .
+                  chmod -R u+w .
+                  patchShebangs scripts
+                  export HOME=$TMPDIR LANG=C.UTF-8
+                  scripts/visual/run-all.sh
+                  cp -r target/visual $out
+                '';
+          }
+          // lib.listToAttrs (
             map
               (
                 {
@@ -160,20 +234,11 @@
             cargo-outdated
             cargo-fuzz
             rustPlatform.bindgenHook
-
-            # scripts/visual (pipewire: a private instance for the volume tests)
-            sway
-            grim
-            foot
-            libnotify
-            pipewire
-            (python3.withPackages (ps: [ ps.pillow ]))
-          ];
+          ]
+          ++ visualTestTools;
           buildInputs = runtimeLibs ++ [ pipewire ];
           LD_LIBRARY_PATH = "${lib.makeLibraryPath buildInputs}";
-          # the only fonts durst sees in scripts/visual: the same text sizes
-          # on every machine
-          DURST_TEST_FONTS = "${dejavu_fonts}/share/fonts";
+          DURST_TEST_FONTS = visualTestFonts;
         };
       }
     );

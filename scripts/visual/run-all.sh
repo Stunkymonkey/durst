@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Runs every scenario in scripts/visual/scenarios and prints a summary.
 # Screenshots and measurements land in target/visual/.
+# Builds the workspace first, unless DURST_BIN_DIR points to built binaries.
 # REPEAT=N runs each scenario N times, to catch flaky (racy) behavior.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-cargo build --quiet --workspace || exit 1
+[[ -n "${DURST_BIN_DIR:-}" ]] || cargo build --quiet --workspace || exit 1
 failed=()
 for scenario in "$here"/scenarios/*.sh; do
     name="$(basename "$scenario" .sh)"

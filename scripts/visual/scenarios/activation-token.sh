@@ -4,7 +4,7 @@
 # token has no input serial (see wayland.rs), so sway marks the window
 # urgent instead of focusing it.
 mkfifo "$DURST_TEST_DIR/app"
-LD_LIBRARY_PATH="$durst_ld" "$root/target/debug/fake-window" durst-app \
+LD_LIBRARY_PATH="$durst_ld" "$bin/fake-window" durst-app \
     <"$DURST_TEST_DIR/app" >"$DURST_TEST_DIR/app.log" 2>&1 &
 exec 5>"$DURST_TEST_DIR/app"
 wait_for grep -q mapped "$DURST_TEST_DIR/app.log"

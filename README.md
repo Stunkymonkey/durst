@@ -196,6 +196,13 @@ Each wait gives up after `WAIT` seconds (default 10), so a slow machine is
 only slower, not flaky. A `sleep` in a scenario is for time that has to pass,
 such as a timeout.
 
+The same tests run in the Nix build sandbox, with the package as installed
+and nothing from the host. This is what CI runs:
+
+```sh
+nix build .#checks.x86_64-linux.visual -L    # screenshots in result/
+```
+
 ### other compositors
 
 The visual tests run on sway only. `nix/vm-test.nix` checks the basics on

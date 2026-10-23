@@ -7,7 +7,8 @@
 # compositor and the screen stay untouched.
 #
 # usage: scripts/visual/run.sh <scenario.sh> [out.png]
-#   Env: DURST_BIN (default target/debug/durst), DURST_ARGS, WAIT (seconds
+#   Env: DURST_BIN_DIR (durst, durstctl and the tools/, default target/debug),
+#   DURST_BIN (default $DURST_BIN_DIR/durst), DURST_ARGS, WAIT (seconds
 #   after which any wait below gives up, default 10; raise it on slow
 #   machines), RESOLUTION (default 1280x720), KEEP_LOGS=1, DURST_TEST_FONTS
 #   (a directory with the only fonts durst sees; the devshell sets it to
@@ -71,6 +72,7 @@ set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
+bin="${DURST_BIN_DIR:-$root/target/debug}"
 scenario="$(realpath "$1")"
 out="$(realpath -m "${2:-$root/target/visual/$(basename "$scenario" .sh).png}")"
 mkdir -p "$(dirname "$out")"
@@ -86,7 +88,7 @@ if [[ -z "${DURST_VISUAL_ISOLATED:-}" ]]; then
         act="$(mktemp -d)"
         mkdir -p "$act/services" "$act/bin"
         printf '#!/bin/sh\nexec %q "$@" >>"$DURST_TEST_DIR/logs/durst.log" 2>&1\n' \
-            "${DURST_BIN:-$root/target/debug/durst}" >"$act/bin/durst"
+            "${DURST_BIN:-$bin/durst}" >"$act/bin/durst"
         chmod +x "$act/bin/durst"
         for f in "$root"/contrib/dbus/*.service; do
             sed "s|@bindir@|$act/bin|" "$f" >"$act/services/$(basename "$f")"
@@ -145,7 +147,7 @@ export SWAYSOCK="$(sed -n 2p "$work/env")"
 mkfifo "$work/pointer" "$work/pointer-ack"
 # opened read-write, so that vpointer's open doesn't wait for a reader
 exec 6<>"$work/pointer-ack"
-LD_LIBRARY_PATH="$durst_ld" "${VPOINTER_BIN:-$root/target/debug/vpointer}" \
+LD_LIBRARY_PATH="$durst_ld" "$bin/vpointer" \
     "$(( ${res%x*} * outputs ))" "${res#*x}" <"$work/pointer" >"$work/pointer-ack" 2>"$log/vpointer.log" &
 exec 3>"$work/pointer"
 WAIT="${WAIT:-10}"
@@ -192,7 +194,7 @@ wait_for sh -c "swaymsg -t get_seats -r | grep -q '\"capabilities\": [1-9]'" \
 logind_start() {
     rm -f "$work/logind"
     mkfifo "$work/logind"
-    LD_LIBRARY_PATH="$durst_ld" "$root/target/debug/fake-logind" <"$work/logind" >>"$log/logind.log" 2>&1 &
+    LD_LIBRARY_PATH="$durst_ld" "$bin/fake-logind" <"$work/logind" >>"$log/logind.log" 2>&1 &
     logind_pid=$!
     exec 4>"$work/logind"
     wait_for busctl --user status org.freedesktop.login1 \
@@ -245,7 +247,7 @@ fi
 export XDG_CONFIG_HOME="$work/config"
 mkdir -p "$XDG_CONFIG_HOME/durst"
 # durstctl for the scenarios
-export PATH="$root/target/debug:$PATH"
+export PATH="$bin:$PATH"
 config="${scenario%.sh}.toml"
 if [[ -f "$config" ]]; then DURST_ARGS="-c $config ${DURST_ARGS:-}"; fi
 
@@ -257,12 +259,12 @@ if [[ $activation -gt 0 ]]; then
     LD_LIBRARY_PATH="$durst_ld" dbus-update-activation-environment --all
 else
     # shellcheck disable=SC2086
-    LD_LIBRARY_PATH="$durst_ld" "${DURST_BIN:-$root/target/debug/durst}" ${DURST_ARGS:-} \
+    LD_LIBRARY_PATH="$durst_ld" "${DURST_BIN:-$bin/durst}" ${DURST_ARGS:-} \
         >"$log/durst.log" 2>&1 &
     wait_for busctl --user status org.freedesktop.Notifications \
         || { echo "durst did not claim the bus name, see $log/durst.log" >&2; KEEP_LOGS=1; exit 1; }
     # connected to the private PipeWire as well
-    wait_for "$root/target/debug/durstctl" volume get \
+    wait_for "$bin/durstctl" volume get \
         || { echo "durst has no volume, see $log/durst.log" >&2; KEEP_LOGS=1; exit 1; }
 fi
 
@@ -309,7 +311,7 @@ pw_set() {
 declare -A player_fds player_pids
 player_start() {
     mkfifo "$work/player-$1"
-    "$root/target/debug/fake-player" "$1" <"$work/player-$1" >"$work/player-$1.calls" 2>>"$log/players.log" &
+    "$bin/fake-player" "$1" <"$work/player-$1" >"$work/player-$1.calls" 2>>"$log/players.log" &
     player_pids[$1]=$!
     local fd
     exec {fd}>"$work/player-$1"
