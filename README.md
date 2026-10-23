@@ -156,7 +156,7 @@ Everything needed (toolchain, libraries, test tools) comes from the flake:
 
 ```sh
 nix develop
-cargo run -- -v              # fails if another daemon owns org.freedesktop.Notifications
+cargo run -p durst -- -v     # fails if another daemon owns org.freedesktop.Notifications
 scripts/notify-test.sh       # manual battery of notifications against any running daemon
 nix build                    # the package, as installed
 ```
