@@ -1,0 +1,16 @@
+[Unit]
+Description=durst notification daemon
+Documentation=man:durst(1) https://github.com/durst-notification/durst
+PartOf=graphical-session.target
+After=graphical-session.target
+# durst needs a Wayland session
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.Notifications
+ExecStart=@bindir@/durst
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target

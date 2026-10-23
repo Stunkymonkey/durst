@@ -1,0 +1,7 @@
+[[rule]]
+app_name = "^mono$"
+style = { font = "DejaVu Sans Mono" }
+
+[[rule]]
+app_name = "^named$"
+style = { show_app_name = true }

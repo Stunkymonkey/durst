@@ -1,0 +1,4 @@
+# the scenario takes several screenshots: the OSD must not hide meanwhile on
+# a slow machine
+[osd.volume]
+timeout = "30s"

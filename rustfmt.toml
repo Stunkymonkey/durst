@@ -1,4 +1,0 @@
-unstable_features = true
-ignore = [
-    "durst/src/interface.rs",
-]

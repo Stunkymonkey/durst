@@ -1,141 +1,55 @@
-#[macro_use]
-extern crate clap;
-
+mod app;
+mod audio;
 mod cli;
 mod config;
-mod interface;
-mod notification;
-mod test;
+mod config_watch;
+mod core;
+mod dbus;
+mod effects;
+mod logind;
+mod mpris;
+mod retry;
+mod ui;
+mod wayland;
 
-use config::DurstConfiguration;
-use dbus::arg;
-use dbus::blocking::stdintf::org_freedesktop_dbus::RequestNameReply;
-use dbus::blocking::LocalConnection;
-use dbus_tree as tree;
-#[allow(unused_imports)]
-use log::{debug, error, info, trace, warn};
-use std::env::var;
-use std::rc::Rc;
-use std::sync::Mutex;
-use std::time::Duration;
-
-use notification::Notification;
-
-#[derive(Debug)]
-struct Container {
-    queue: Vec<Notification>,
-    config: DurstConfiguration,
-}
-
-type Err = tree::MethodErr;
-
-impl interface::OrgFreedesktopNotifications for Mutex<Container> {
-    fn get_capabilities(&self) -> Result<Vec<String>, Err> {
-        debug!("get_capabilities");
-        Ok(vec!["test".to_string()])
-    }
-    fn notify(
-        &self,
-        app_name: &str,
-        replaces_id: u32,
-        app_icon: &str,
-        summary: &str,
-        body: &str,
-        actions: Vec<&str>,
-        hints: ::std::collections::HashMap<&str, arg::Variant<Box<dyn arg::RefArg>>>,
-        expire_timeout: i32,
-    ) -> Result<u32, Err> {
-        let new_notification = Notification::new(
-            app_name,
-            replaces_id,
-            app_icon,
-            summary,
-            body,
-            actions,
-            hints,
-            expire_timeout,
-        );
-        debug!("notify {:?}", new_notification);
-        let mut data = self.lock().unwrap();
-        (*data).queue.push(new_notification);
-        Ok((*data).queue.len() as u32)
-    }
-    fn close_notification(&self, id: u32) -> Result<(), Err> {
-        debug!("close_notification {:?}", id);
-        Ok(())
-    }
-    fn get_server_information(&self) -> Result<(String, String, String, String), Err> {
-        debug!("getserverinformation");
-        Ok((
-            env!("CARGO_PKG_NAME").to_string(),
-            "durst-notification.org".to_string(),
-            env!("CARGO_PKG_VERSION").to_string(),
-            "1.2".to_string(),
-        ))
-    }
-}
-
-impl AsRef<dyn interface::OrgFreedesktopNotifications + 'static> for Rc<Mutex<Container>> {
-    fn as_ref(&self) -> &(dyn interface::OrgFreedesktopNotifications + 'static) {
-        &**self
-    }
-}
-
-fn run(config: DurstConfiguration) -> Result<(), Box<dyn std::error::Error>> {
-    let container_rc = Rc::new(Mutex::new(Container {
-        queue: Vec::<Notification>::new(),
-        config: config,
-    }));
-
-    let factory = tree::Factory::new_fn::<()>();
-    let iface = interface::org_freedesktop_notifications_server(&factory, (), move |_| {
-        Rc::clone(&container_rc)
-    });
-
-    let c = LocalConnection::new_session()?;
-
-    let r = c.request_name("org.freedesktop.Notifications", false, true, true)?;
-    if r != RequestNameReply::PrimaryOwner {
-        panic!("Another notification daemon is running!");
-    }
-
-    let tree = factory
-        .tree(())
-        // needed for introspectable of children
-        .add(factory.object_path("/", ()).introspectable())
-        .add(
-            factory
-                .object_path("/org/freedesktop/Notifications", ())
-                .introspectable()
-                .add(iface),
-        );
-    tree.start_receive(&c);
-
-    loop {
-        c.process(Duration::from_millis(1000))?;
-    }
-}
+use std::path::PathBuf;
 
 fn main() {
-    env_logger::init();
+    let matches = cli::build_cli().get_matches();
 
-    let parsed_cli = cli::build_cli().get_matches();
-    if let Some(mode) = parsed_cli.value_of("mode") {
-        match mode {
-            "wayland" => println!("You are using wayland"),
-            "stdout" => println!("You are using stdout"),
-            _ => unreachable!(),
+    let level = match matches.get_count("verbose") {
+        0 => "info",
+        1 => "debug",
+        _ => "trace",
+    };
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or(format!("warn,durst={level}")),
+    )
+    .init();
+
+    let (path, explicit) = match matches.get_one::<String>("config") {
+        Some(path) => (PathBuf::from(path), true),
+        None => (config::default_path(), false),
+    };
+    // a broken config must not leave the user without notifications: start
+    // with the defaults and show the error as a notification
+    let (config, text, error) = match config::load(&path, explicit) {
+        Ok((config, text)) => (config, text, None),
+        Err(e) => {
+            log::error!("{e}");
+            (config::Config::default(), None, Some(e))
         }
-    }
+    };
+    log::debug!("{config:?}");
 
-    let config: DurstConfiguration;
-    if let Some(path) = parsed_cli.value_of("config-path") {
-        config = config::load_config_path(path.to_string());
-    } else {
-        config = config::load_config_default();
-    }
-
-    if let Err(e) = run(config) {
-        println!("{}", e);
+    let source = app::ConfigSource {
+        path,
+        explicit,
+        text,
+        error,
+    };
+    if let Err(e) = app::run(config, source) {
+        log::error!("{e}");
+        std::process::exit(1);
     }
 }

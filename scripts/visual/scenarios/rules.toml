@@ -1,0 +1,27 @@
+[general]
+max_visible = 0
+
+[[rule]]
+app_name = "^red$"
+style = { border.color = "#ff0000" }
+
+[[rule]]
+app_name = "^secret$"
+set_summary = "[{app_name}] {summary}"
+hide_body = true
+
+[[rule]]
+app_name = "^promote$"
+set_urgency = "critical"
+
+[[rule]]
+app_name = "^iconright$"
+icon_position = "right"
+
+[[rule]]
+app_name = "^noicon$"
+icon_position = "off"
+
+[[rule]]
+app_name = "^fallback$"
+default_icon = "durst-test"

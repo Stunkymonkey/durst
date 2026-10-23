@@ -1,0 +1,21 @@
+[package]
+name = "durst-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+# not part of the main workspace: it needs cargo-fuzz and is built on its own
+[workspace]
+
+[[bin]]
+name = "markup"
+path = "fuzz_targets/markup.rs"
+test = false
+doc = false
+bench = false

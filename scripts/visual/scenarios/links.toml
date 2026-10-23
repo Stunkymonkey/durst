@@ -1,0 +1,5 @@
+[general]
+browser = ["sh", "-c", "echo \"$1\" >> \"$DURST_TEST_DIR/opened\"", "sh"]
+
+[mouse]
+right = ["open_url"]
