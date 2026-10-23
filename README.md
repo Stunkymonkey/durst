@@ -184,7 +184,9 @@ scripts/visual/run-all.sh    # builds, runs all scenarios, prints ok/FAIL
 ```
 
 Screenshots and measurements land in `target/visual/`. Rendering uses iced's
-software renderer (`ICED_BACKEND=tiny-skia`), so pixels are deterministic.
+software renderer (`ICED_BACKEND=tiny-skia`), so pixels are deterministic,
+and durst only sees the DejaVu fonts (`DURST_TEST_FONTS`, set by the
+devshell), so text has the same size on every machine.
 `REPEAT=N scripts/visual/run-all.sh` runs every scenario N times, to catch
 races.
 

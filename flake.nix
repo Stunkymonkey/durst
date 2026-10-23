@@ -171,6 +171,9 @@
           ];
           buildInputs = runtimeLibs ++ [ pipewire ];
           LD_LIBRARY_PATH = "${lib.makeLibraryPath buildInputs}";
+          # the only fonts durst sees in scripts/visual: the same text sizes
+          # on every machine
+          DURST_TEST_FONTS = "${dejavu_fonts}/share/fonts";
         };
       }
     );

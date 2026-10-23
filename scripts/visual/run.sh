@@ -9,7 +9,9 @@
 # usage: scripts/visual/run.sh <scenario.sh> [out.png]
 #   Env: DURST_BIN (default target/debug/durst), DURST_ARGS, WAIT (seconds
 #   after which any wait below gives up, default 10; raise it on slow
-#   machines), RESOLUTION (default 1280x720), KEEP_LOGS=1.
+#   machines), RESOLUTION (default 1280x720), KEEP_LOGS=1, DURST_TEST_FONTS
+#   (a directory with the only fonts durst sees; the devshell sets it to
+#   DejaVu, so that text has the same size on every machine).
 #
 # durst works asynchronously, but a scenario never sleeps to let it catch up:
 # it waits for what it expects (`await`, `wait_for`, `snap EXPR`), and
@@ -225,8 +227,19 @@ dbus-monitor --session "type='signal',interface='org.freedesktop.Notifications'"
     >"$work/signals" 2>/dev/null &
 
 export DURST_TEST_DIR="$work"
-# scenarios can provide icon themes and .desktop files in $DURST_TEST_DIR/share
-export XDG_DATA_DIRS="$work/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+# scenarios can provide icon themes, sounds and .desktop files in
+# $DURST_TEST_DIR/share; the system's (other icon themes) stay out
+mkdir -p "$work/share"
+export XDG_DATA_DIRS="$work/share"
+# text sizes depend on the font, and the default font differs between
+# machines: durst only sees the fonts in DURST_TEST_FONTS
+if [[ -n "${DURST_TEST_FONTS:-}" ]]; then
+    printf '<?xml version="1.0"?>\n<fontconfig>\n  <dir>%s</dir>\n  <cachedir>%s</cachedir>\n</fontconfig>\n' \
+        "$DURST_TEST_FONTS" "$work/fontconfig" >"$work/fonts.conf"
+    export FONTCONFIG_FILE="$work/fonts.conf"
+else
+    echo "warning: DURST_TEST_FONTS is not set, sizes depend on this machine's fonts" >&2
+fi
 # never read the real user's durst or GTK config; the directory exists so
 # durst can watch it for a config file appearing
 export XDG_CONFIG_HOME="$work/config"
